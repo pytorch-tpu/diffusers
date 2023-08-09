@@ -51,8 +51,8 @@ def main(index):
     iters = 5
     for i in range(iters):
         start = time()
-        # prompt = prompts[rank::world_size]
-        prompt = prompts[rank]
+        prompt = prompts[rank::world_size]
+        # prompt = prompts[rank]
         image = pipe(prompt, num_inference_steps=inference_steps).images[0]
         print(f'Step {i} inference time {time()-start} sec', flush=True)
 

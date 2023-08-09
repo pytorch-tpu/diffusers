@@ -15,7 +15,7 @@ device = xm.xla_device()
 pipe.to(device)
 
 bs = 8
-inference_steps = 40
+inference_steps = 30
 height = width = 512
 
 prompts = ["a photo of an astronaut riding a horse on mars"] * bs
