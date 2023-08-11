@@ -307,7 +307,8 @@ class EulerDiscreteScheduler(SchedulerMixin, ConfigMixin):
     def step(
         self,
         model_output: torch.FloatTensor,
-        timestep: Union[float, torch.FloatTensor],
+        step_index: int,
+        # timestep: Union[float, torch.FloatTensor],
         sample: torch.FloatTensor,
         s_churn: float = 0.0,
         s_tmin: float = 0.0,
@@ -338,7 +339,7 @@ class EulerDiscreteScheduler(SchedulerMixin, ConfigMixin):
             `tuple`. When returning a tuple, the first element is the sample tensor.
 
         """
-
+        timestep = self.timesteps[step_index]
         if (
             isinstance(timestep, int)
             or isinstance(timestep, torch.IntTensor)
@@ -361,7 +362,8 @@ class EulerDiscreteScheduler(SchedulerMixin, ConfigMixin):
         if isinstance(timestep, torch.Tensor):
             timestep = timestep.to(self.timesteps.device)
 
-        step_index = (self.timesteps == timestep).nonzero().item()
+        # step_index = (self.timesteps == timestep).nonzero().item()
+
         sigma = self.sigmas[step_index]
 
         gamma = min(s_churn / (len(self.sigmas) - 1), 2**0.5 - 1) if s_tmin <= sigma <= s_tmax else 0.0

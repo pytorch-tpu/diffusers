@@ -840,13 +840,8 @@ class StableDiffusionXLPipeline(DiffusionPipeline, FromSingleFileMixin, LoraLoad
 
             # compute the previous noisy sample x_t -> x_t-1
             with xp.Trace('pipe_sched'):
-                latents = self.scheduler.step(noise_pred, t, latents, **extra_step_kwargs, return_dict=False)[0]
+                latents = self.scheduler.step(noise_pred, i, latents, **extra_step_kwargs, return_dict=False)[0]
             xm.mark_step()
-            # # call the callback, if provided
-            # if i == len(timesteps) - 1 or ((i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0):
-            #     progress_bar.update()
-            #     if callback is not None and i % callback_steps == 0:
-            #         callback(i, t, latents)
 
         with xp.Trace('pipe_vae'):
             # make sure the VAE is in float32 mode, as it overflows in float16

@@ -633,7 +633,8 @@ class DPMSolverMultistepScheduler(SchedulerMixin, ConfigMixin):
     def step(
         self,
         model_output: torch.FloatTensor,
-        timestep: int,
+        step_index: int,
+        # timestep: int,
         sample: torch.FloatTensor,
         generator=None,
         return_dict: bool = True,
@@ -658,13 +659,6 @@ class DPMSolverMultistepScheduler(SchedulerMixin, ConfigMixin):
                 "Number of inference steps is 'None', you need to run 'set_timesteps' after creating the scheduler"
             )
 
-        if isinstance(timestep, torch.Tensor):
-            timestep = timestep.to(self.timesteps.device)
-        step_index = (self.timesteps == timestep).nonzero()
-        if len(step_index) == 0:
-            step_index = len(self.timesteps) - 1
-        else:
-            step_index = step_index.item()
         prev_timestep = 0 if step_index == len(self.timesteps) - 1 else self.timesteps[step_index + 1]
         lower_order_final = (
             (step_index == len(self.timesteps) - 1) and self.config.lower_order_final and len(self.timesteps) < 15
@@ -672,7 +666,7 @@ class DPMSolverMultistepScheduler(SchedulerMixin, ConfigMixin):
         lower_order_second = (
             (step_index == len(self.timesteps) - 2) and self.config.lower_order_final and len(self.timesteps) < 15
         )
-
+        timestep = self.timesteps[step_index]
         model_output = self.convert_model_output(model_output, timestep, sample)
         for i in range(self.config.solver_order - 1):
             self.model_outputs[i] = self.model_outputs[i + 1]
