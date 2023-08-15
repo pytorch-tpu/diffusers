@@ -815,7 +815,7 @@ class StableDiffusionXLPipeline(DiffusionPipeline, FromSingleFileMixin, LoraLoad
             # expand the latents if we are doing classifier free guidance
             latent_model_input = torch.cat([latents] * 2) if do_classifier_free_guidance else latents
 
-            latent_model_input = self.scheduler.scale_model_input(latent_model_input, t)
+            latent_model_input = self.scheduler.scale_model_input(latent_model_input, i, t)
 
             # predict the noise residual
             added_cond_kwargs = {"text_embeds": add_text_embeds, "time_ids": add_time_ids}
@@ -854,22 +854,24 @@ class StableDiffusionXLPipeline(DiffusionPipeline, FromSingleFileMixin, LoraLoad
             else:
                 image = latents
                 return StableDiffusionXLPipelineOutput(images=image)
-
-        # apply watermark if available
-        if self.watermark is not None:
-            image = self.watermark.apply_watermark(image)
+        with xp.Trace('pipe_watermark'):
+            # apply watermark if available
+            if self.watermark is not None:
+                image = self.watermark.apply_watermark(image)
 
         with xp.Trace('pipe_postprocess'):
             image = self.image_processor.postprocess(image, output_type=output_type)
 
+        with xp.Trace('pipe_offload'):
         # Offload last model to CPU
-        if hasattr(self, "final_offload_hook") and self.final_offload_hook is not None:
-            self.final_offload_hook.offload()
+            if hasattr(self, "final_offload_hook") and self.final_offload_hook is not None:
+                self.final_offload_hook.offload()
 
-        if not return_dict:
-            return (image,)
-
-        return StableDiffusionXLPipelineOutput(images=image)
+            if not return_dict:
+                return (image,)
+        with xp.Trace('pipe_out'):
+            out = StableDiffusionXLPipelineOutput(images=image)
+        return out
 
     # Overrride to properly handle the loading and unloading of the additional text encoder.
     def load_lora_weights(self, pretrained_model_name_or_path_or_dict: Union[str, Dict[str, torch.Tensor]], **kwargs):

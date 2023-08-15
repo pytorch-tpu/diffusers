@@ -186,7 +186,7 @@ class EulerDiscreteScheduler(SchedulerMixin, ConfigMixin):
         return (self.sigmas.max() ** 2 + 1) ** 0.5
 
     def scale_model_input(
-        self, sample: torch.FloatTensor, timestep: Union[float, torch.FloatTensor]
+        self, sample: torch.FloatTensor, step_index: int, timestep: Union[float, torch.FloatTensor]
     ) -> torch.FloatTensor:
         """
         Scales the denoising model input by `(sigma**2 + 1) ** 0.5` to match the Euler algorithm.
@@ -200,7 +200,6 @@ class EulerDiscreteScheduler(SchedulerMixin, ConfigMixin):
         """
         if isinstance(timestep, torch.Tensor):
             timestep = timestep.to(self.timesteps.device)
-        step_index = (self.timesteps == timestep).nonzero().item()
         sigma = self.sigmas[step_index]
 
         sample = sample / ((sigma**2 + 1) ** 0.5)
@@ -308,7 +307,6 @@ class EulerDiscreteScheduler(SchedulerMixin, ConfigMixin):
         self,
         model_output: torch.FloatTensor,
         step_index: int,
-        # timestep: Union[float, torch.FloatTensor],
         sample: torch.FloatTensor,
         s_churn: float = 0.0,
         s_tmin: float = 0.0,
@@ -361,8 +359,6 @@ class EulerDiscreteScheduler(SchedulerMixin, ConfigMixin):
 
         if isinstance(timestep, torch.Tensor):
             timestep = timestep.to(self.timesteps.device)
-
-        # step_index = (self.timesteps == timestep).nonzero().item()
 
         sigma = self.sigmas[step_index]
 

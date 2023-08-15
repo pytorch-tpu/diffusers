@@ -686,14 +686,8 @@ class StableDiffusionPipeline(DiffusionPipeline, TextualInversionLoaderMixin, Lo
                 noise_pred = rescale_noise_cfg(noise_pred, noise_pred_text, guidance_rescale=guidance_rescale)
 
             # compute the previous noisy sample x_t -> x_t-1
-            # latents = self.scheduler.step(noise_pred, t, latents, **extra_step_kwargs, return_dict=False)[0]
             latents = self.scheduler.step(noise_pred, i, latents, **extra_step_kwargs, return_dict=False)[0]
             xm.mark_step()
-            # # call the callback, if provided
-            # if i == len(timesteps) - 1 or ((i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0):
-            #     progress_bar.update()
-            #     if callback is not None and i % callback_steps == 0:
-            #         callback(i, t, latents)
 
         if not output_type == "latent":
             image = self.vae.decode(latents / self.vae.config.scaling_factor, return_dict=False)[0]

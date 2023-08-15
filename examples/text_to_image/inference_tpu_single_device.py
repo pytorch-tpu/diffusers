@@ -14,9 +14,9 @@ pipe = DiffusionPipeline.from_pretrained("stabilityai/stable-diffusion-xl-base-0
 device = xm.xla_device()
 pipe.to(device)
 
-bs = 8
-inference_steps = 30
-height = width = 512
+bs = 32
+inference_steps = 40
+height = width = 1024
 
 prompts = ["a photo of an astronaut riding a horse on mars"] * bs
 print(f'batch size = {bs}, inference steps = {inference_steps}',
@@ -24,12 +24,12 @@ print(f'batch size = {bs}, inference steps = {inference_steps}',
       flush=True
       )
 
+# prompts = prompts.to(device)
 iters = 15
 print('starting inference', flush=True)
 for i in range(iters):
     start = time()
-    prompt = prompts
-    image = pipe(prompt,
+    image = pipe(prompts,
                  num_inference_steps=inference_steps,
                  height=height,
                  width=width,
