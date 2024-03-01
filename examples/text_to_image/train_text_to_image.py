@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # coding=utf-8
-# Copyright 2023 The HuggingFace Inc. team. All rights reserved.
+# Copyright 2024 The HuggingFace Inc. team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,6 +12,7 @@
 # distributed under the License is distributed on an "AS IS" BASIS,
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
+# limitations under the License.
 
 import argparse
 import logging
@@ -35,7 +36,6 @@ from accelerate.utils import ProjectConfiguration, set_seed
 from datasets import load_dataset
 from huggingface_hub import create_repo, upload_folder
 from packaging import version
-from PIL import Image
 from torchvision import transforms
 from tqdm.auto import tqdm
 from transformers import CLIPTextModel, CLIPTokenizer
@@ -44,9 +44,11 @@ from transformers.utils import ContextManagers
 import diffusers
 from diffusers import AutoencoderKL, DDPMScheduler, StableDiffusionPipeline, UNet2DConditionModel
 from diffusers.optimization import get_scheduler
-from diffusers.training_utils import EMAModel
-from diffusers.utils import check_min_version, deprecate, is_wandb_available
+from diffusers.training_utils import EMAModel, compute_snr
+from diffusers.utils import check_min_version, deprecate, is_wandb_available, make_image_grid
+from diffusers.utils.hub_utils import load_or_create_model_card, populate_model_card
 from diffusers.utils.import_utils import is_xformers_available
+from diffusers.utils.torch_utils import is_compiled_module
 
 
 if is_wandb_available():
@@ -54,7 +56,7 @@ if is_wandb_available():
 
 
 # Will error if the minimal version of diffusers is not installed. Remove at your own risks.
-check_min_version("0.20.0.dev0")
+check_min_version("0.27.0.dev0")
 
 logger = get_logger(__name__, log_level="INFO")
 
@@ -63,22 +65,11 @@ DATASET_NAME_MAPPING = {
 }
 
 
-def make_image_grid(imgs, rows, cols):
-    assert len(imgs) == rows * cols
-
-    w, h = imgs[0].size
-    grid = Image.new("RGB", size=(cols * w, rows * h))
-
-    for i, img in enumerate(imgs):
-        grid.paste(img, box=(i % cols * w, i // cols * h))
-    return grid
-
-
 def save_model_card(
     args,
     repo_id: str,
-    images=None,
-    repo_folder=None,
+    images: list = None,
+    repo_folder: str = None,
 ):
     img_str = ""
     if len(images) > 0:
@@ -86,21 +77,7 @@ def save_model_card(
         image_grid.save(os.path.join(repo_folder, "val_imgs_grid.png"))
         img_str += "![val_imgs_grid](./val_imgs_grid.png)\n"
 
-    yaml = f"""
----
-license: creativeml-openrail-m
-base_model: {args.pretrained_model_name_or_path}
-datasets:
-- {args.dataset_name}
-tags:
-- stable-diffusion
-- stable-diffusion-diffusers
-- text-to-image
-- diffusers
-inference: true
----
-    """
-    model_card = f"""
+    model_description = f"""
 # Text-to-image finetuning - {repo_id}
 
 This pipeline was finetuned from **{args.pretrained_model_name_or_path}** on the **{args.dataset_name}** dataset. Below are some example images generated with the finetuned pipeline using the following prompts: {args.validation_prompts}: \n
@@ -143,10 +120,21 @@ These are the key hyperparameters used during training:
 More information on all the CLI arguments and the environment are available on your [`wandb` run page]({wandb_run_url}).
 """
 
-    model_card += wandb_info
+    model_description += wandb_info
 
-    with open(os.path.join(repo_folder, "README.md"), "w") as f:
-        f.write(yaml + model_card)
+    model_card = load_or_create_model_card(
+        repo_id_or_path=repo_id,
+        from_training=True,
+        license="creativeml-openrail-m",
+        base_model=args.pretrained_model_name_or_path,
+        model_description=model_description,
+        inference=True,
+    )
+
+    tags = ["stable-diffusion", "stable-diffusion-diffusers", "text-to-image", "diffusers"]
+    model_card = populate_model_card(model_card, tags=tags)
+
+    model_card.save(os.path.join(repo_folder, "README.md"))
 
 
 def log_validation(vae, text_encoder, tokenizer, unet, args, accelerator, weight_dtype, epoch):
@@ -160,6 +148,7 @@ def log_validation(vae, text_encoder, tokenizer, unet, args, accelerator, weight
         unet=accelerator.unwrap_model(unet),
         safety_checker=None,
         revision=args.revision,
+        variant=args.variant,
         torch_dtype=weight_dtype,
     )
     pipeline = pipeline.to(accelerator.device)
@@ -220,6 +209,12 @@ def parse_args():
         default=None,
         required=False,
         help="Revision of pretrained model identifier from huggingface.co/models.",
+    )
+    parser.add_argument(
+        "--variant",
+        type=str,
+        default=None,
+        help="Variant of the model files of the pretrained model identifier from huggingface.co/models, 'e.g.' fp16",
     )
     parser.add_argument(
         "--dataset_name",
@@ -401,7 +396,7 @@ def parse_args():
         "--prediction_type",
         type=str,
         default=None,
-        help="The prediction_type that shall be used for training. Choose between 'epsilon' or 'v_prediction' or leave `None`. If left to `None` the default prediction type of the scheduler: `noise_scheduler.config.prediciton_type` is chosen.",
+        help="The prediction_type that shall be used for training. Choose between 'epsilon' or 'v_prediction' or leave `None`. If left to `None` the default prediction type of the scheduler: `noise_scheduler.config.prediction_type` is chosen.",
     )
     parser.add_argument(
         "--hub_model_id",
@@ -482,6 +477,14 @@ def parse_args():
             " more information see https://huggingface.co/docs/accelerate/v0.17.0/en/package_reference/accelerator#accelerate.Accelerator"
         ),
     )
+    parser.add_argument(
+        "--xla_input_sharding",
+        action="store_true",
+        help=(
+           "Wrpas dataloader with MpDeviceLoader with input sharding support."
+           " It also looks at `XLA_AUTO_SPMD_MESH` to determine the input batch sharding strategy."
+        ),
+    )
 
     args = parser.parse_args()
     env_local_rank = int(os.environ.get("LOCAL_RANK", -1))
@@ -501,6 +504,12 @@ def parse_args():
 
 def main():
     args = parse_args()
+
+    if args.report_to == "wandb" and args.hub_token is not None:
+        raise ValueError(
+            "You cannot use both --report_to=wandb and --hub_token due to a security risk of exposing your token."
+            " Please use `huggingface-cli login` to authenticate with the Hub."
+        )
 
     if args.non_ema_revision is not None:
         deprecate(
@@ -579,24 +588,25 @@ def main():
     # across multiple gpus and only UNet2DConditionModel will get ZeRO sharded.
     with ContextManagers(deepspeed_zero_init_disabled_context_manager()):
         text_encoder = CLIPTextModel.from_pretrained(
-            args.pretrained_model_name_or_path, subfolder="text_encoder", revision=args.revision
+            args.pretrained_model_name_or_path, subfolder="text_encoder", revision=args.revision, variant=args.variant
         )
         vae = AutoencoderKL.from_pretrained(
-            args.pretrained_model_name_or_path, subfolder="vae", revision=args.revision
+            args.pretrained_model_name_or_path, subfolder="vae", revision=args.revision, variant=args.variant
         )
 
     unet = UNet2DConditionModel.from_pretrained(
         args.pretrained_model_name_or_path, subfolder="unet", revision=args.non_ema_revision
     )
 
-    # Freeze vae and text_encoder
+    # Freeze vae and text_encoder and set unet to trainable
     vae.requires_grad_(False)
     text_encoder.requires_grad_(False)
+    unet.train()
 
     # Create EMA for the unet.
     if args.use_ema:
         ema_unet = UNet2DConditionModel.from_pretrained(
-            args.pretrained_model_name_or_path, subfolder="unet", revision=args.revision
+            args.pretrained_model_name_or_path, subfolder="unet", revision=args.revision, variant=args.variant
         )
         ema_unet = EMAModel(ema_unet.parameters(), model_cls=UNet2DConditionModel, model_config=ema_unet.config)
 
@@ -613,42 +623,19 @@ def main():
         else:
             raise ValueError("xformers is not available. Make sure it is installed correctly")
 
-    def compute_snr(timesteps):
-        """
-        Computes SNR as per https://github.com/TiankaiHang/Min-SNR-Diffusion-Training/blob/521b624bd70c67cee4bdf49225915f5945a872e3/guided_diffusion/gaussian_diffusion.py#L847-L849
-        """
-        alphas_cumprod = noise_scheduler.alphas_cumprod
-        sqrt_alphas_cumprod = alphas_cumprod**0.5
-        sqrt_one_minus_alphas_cumprod = (1.0 - alphas_cumprod) ** 0.5
-
-        # Expand the tensors.
-        # Adapted from https://github.com/TiankaiHang/Min-SNR-Diffusion-Training/blob/521b624bd70c67cee4bdf49225915f5945a872e3/guided_diffusion/gaussian_diffusion.py#L1026
-        sqrt_alphas_cumprod = sqrt_alphas_cumprod.to(device=timesteps.device)[timesteps].float()
-        while len(sqrt_alphas_cumprod.shape) < len(timesteps.shape):
-            sqrt_alphas_cumprod = sqrt_alphas_cumprod[..., None]
-        alpha = sqrt_alphas_cumprod.expand(timesteps.shape)
-
-        sqrt_one_minus_alphas_cumprod = sqrt_one_minus_alphas_cumprod.to(device=timesteps.device)[timesteps].float()
-        while len(sqrt_one_minus_alphas_cumprod.shape) < len(timesteps.shape):
-            sqrt_one_minus_alphas_cumprod = sqrt_one_minus_alphas_cumprod[..., None]
-        sigma = sqrt_one_minus_alphas_cumprod.expand(timesteps.shape)
-
-        # Compute SNR.
-        snr = (alpha / sigma) ** 2
-        return snr
-
     # `accelerate` 0.16.0 will have better support for customized saving
     if version.parse(accelerate.__version__) >= version.parse("0.16.0"):
         # create custom saving & loading hooks so that `accelerator.save_state(...)` serializes in a nice format
         def save_model_hook(models, weights, output_dir):
-            if args.use_ema:
-                ema_unet.save_pretrained(os.path.join(output_dir, "unet_ema"))
+            if accelerator.is_main_process:
+                if args.use_ema:
+                    ema_unet.save_pretrained(os.path.join(output_dir, "unet_ema"))
 
-            for i, model in enumerate(models):
-                model.save_pretrained(os.path.join(output_dir, "unet"))
+                for i, model in enumerate(models):
+                    model.save_pretrained(os.path.join(output_dir, "unet"))
 
-                # make sure to pop weight so that corresponding model is not saved again
-                weights.pop()
+                    # make sure to pop weight so that corresponding model is not saved again
+                    weights.pop()
 
         def load_model_hook(models, input_dir):
             if args.use_ema:
@@ -657,7 +644,7 @@ def main():
                 ema_unet.to(accelerator.device)
                 del load_model
 
-            for i in range(len(models)):
+            for _ in range(len(models)):
                 # pop models so that they are not loaded again
                 model = models.pop()
 
@@ -716,6 +703,7 @@ def main():
             args.dataset_name,
             args.dataset_config_name,
             cache_dir=args.cache_dir,
+            data_dir=args.train_data_dir,
         )
     else:
         data_files = {}
@@ -809,6 +797,34 @@ def main():
         num_workers=args.dataloader_num_workers,
     )
 
+    # Wraps with XLA MpDeviceLoader if `--xla_input_sharding` is set.
+    import torch_xla.core.xla_model as xm
+    import torch_xla.experimental.xla_sharding as xs
+    import torch_xla.runtime as xr
+    import torch_xla.distributed.parallel_loader as pl
+    num_devices = xr.global_runtime_device_count()
+    device_ids = np.arange(num_devices)
+    def get_mesh(ici_mesh_shape):
+        return xs.Mesh(device_ids, ici_mesh_shape)
+
+    sharding_spec = None
+    if args.xla_input_sharding:
+        auto_mesh = os.getenv('XLA_AUTO_SPMD_MESH')
+        print('--xla_input_sharding with XLA_AUTO_SPMD_MESH=', auto_mesh)
+        if auto_mesh:
+            mesh_shape = tuple(list(map(int,auto_mesh.split(','))))
+            mesh = get_mesh(mesh_shape)
+            if mesh_shape[0] == 1 or mesh_shape[1] == 1:
+              sharding_spec = xs.ShardingSpec(mesh, (0, 1))
+            else:
+              sharding_spec = xs.ShardingSpec(mesh, (0, None))
+        else:
+            mesh = get_mesh((num_devices, 1))
+            sharding_spec = xs.ShardingSpec(mesh, (0, 1))
+        print('input sharding_spec=', sharding_spec)
+        train_dataloader = pl.MpDeviceLoader(train_dataloader, xm.xla_device(), input_sharding=sharding_spec)
+
+
     # Scheduler and math around the number of training steps.
     overrode_max_train_steps = False
     num_update_steps_per_epoch = math.ceil(len(train_dataloader) / args.gradient_accumulation_steps)
@@ -831,7 +847,7 @@ def main():
     if args.use_ema:
         ema_unet.to(accelerator.device)
 
-    # For mixed precision training we cast all non-trainable weigths (vae, non-lora text_encoder and non-lora unet) to half-precision
+    # For mixed precision training we cast all non-trainable weights (vae, non-lora text_encoder and non-lora unet) to half-precision
     # as these weights are only used for inference, keeping weights in full precision is not required.
     weight_dtype = torch.float32
     if accelerator.mixed_precision == "fp16":
@@ -858,6 +874,12 @@ def main():
         tracker_config = dict(vars(args))
         tracker_config.pop("validation_prompts")
         accelerator.init_trackers(args.tracker_project_name, tracker_config)
+
+    # Function for unwrapping if model was compiled with `torch.compile`.
+    def unwrap_model(model):
+        model = accelerator.unwrap_model(model)
+        model = model._orig_mod if is_compiled_module(model) else model
+        return model
 
     # Train!
     total_batch_size = args.train_batch_size * accelerator.num_processes * args.gradient_accumulation_steps
@@ -888,29 +910,39 @@ def main():
                 f"Checkpoint '{args.resume_from_checkpoint}' does not exist. Starting a new training run."
             )
             args.resume_from_checkpoint = None
+            initial_global_step = 0
         else:
             accelerator.print(f"Resuming from checkpoint {path}")
             accelerator.load_state(os.path.join(args.output_dir, path))
             global_step = int(path.split("-")[1])
 
-            resume_global_step = global_step * args.gradient_accumulation_steps
+            initial_global_step = global_step
             first_epoch = global_step // num_update_steps_per_epoch
-            resume_step = resume_global_step % (num_update_steps_per_epoch * args.gradient_accumulation_steps)
 
-    # Only show the progress bar once on each machine.
-    progress_bar = tqdm(range(global_step, args.max_train_steps), disable=not accelerator.is_local_main_process)
-    progress_bar.set_description("Steps")
+    else:
+        initial_global_step = 0
+
+    progress_bar = tqdm(
+        range(0, args.max_train_steps),
+        initial=initial_global_step,
+        desc="Steps",
+        # Only show the progress bar once on each machine.
+        disable=not accelerator.is_local_main_process,
+    )
+
+    profile_step = int(os.environ.get('PROFILE_STEP', -1))
+    profile_epoch = int(os.environ.get('PROFILE_EPOCH', -1))
+    profile_duration = int(os.environ.get('PROFILE_DURATION_MS', 20000))
+    profile_logdir = os.environ.get('PROFILE_LOGDIR', None)
 
     for epoch in range(first_epoch, args.num_train_epochs):
-        unet.train()
         train_loss = 0.0
         for step, batch in enumerate(train_dataloader):
-            # Skip steps until we reach the resumed step
-            if args.resume_from_checkpoint and epoch == first_epoch and step < resume_step:
-                if step % args.gradient_accumulation_steps == 0:
-                    progress_bar.update(1)
-                continue
-
+            if step == profile_step and epoch == profile_epoch:
+                import torch_xla.debug.profiler as xp
+                import tempfile
+                trace = lambda: xp.trace('127.0.0.1:9012', profile_logdir or tempfile.mkdtemp(), profile_duration or 20000)
+                Thread(target=trace).start()
             with accelerator.accumulate(unet):
                 # Convert images to latent space
                 latents = vae.encode(batch["pixel_values"].to(weight_dtype)).latent_dist.sample()
@@ -938,7 +970,7 @@ def main():
                     noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps)
 
                 # Get the text embedding for conditioning
-                encoder_hidden_states = text_encoder(batch["input_ids"])[0]
+                encoder_hidden_states = text_encoder(batch["input_ids"], return_dict=False)[0]
 
                 # Get the target for loss depending on the prediction type
                 if args.prediction_type is not None:
@@ -953,7 +985,7 @@ def main():
                     raise ValueError(f"Unknown prediction type {noise_scheduler.config.prediction_type}")
 
                 # Predict the noise residual and compute loss
-                model_pred = unet(noisy_latents, timesteps, encoder_hidden_states).sample
+                model_pred = unet(noisy_latents, timesteps, encoder_hidden_states, return_dict=False)[0]
 
                 if args.snr_gamma is None:
                     loss = F.mse_loss(model_pred.float(), target.float(), reduction="mean")
@@ -961,13 +993,15 @@ def main():
                     # Compute loss-weights as per Section 3.4 of https://arxiv.org/abs/2303.09556.
                     # Since we predict the noise instead of x_0, the original formulation is slightly changed.
                     # This is discussed in Section 4.2 of the same paper.
-                    snr = compute_snr(timesteps)
-                    mse_loss_weights = (
-                        torch.stack([snr, args.snr_gamma * torch.ones_like(timesteps)], dim=1).min(dim=1)[0] / snr
-                    )
-                    # We first calculate the original loss. Then we mean over the non-batch dimensions and
-                    # rebalance the sample-wise losses with their respective loss weights.
-                    # Finally, we take the mean of the rebalanced loss.
+                    snr = compute_snr(noise_scheduler, timesteps)
+                    mse_loss_weights = torch.stack([snr, args.snr_gamma * torch.ones_like(timesteps)], dim=1).min(
+                        dim=1
+                    )[0]
+                    if noise_scheduler.config.prediction_type == "epsilon":
+                        mse_loss_weights = mse_loss_weights / snr
+                    elif noise_scheduler.config.prediction_type == "v_prediction":
+                        mse_loss_weights = mse_loss_weights / (snr + 1)
+
                     loss = F.mse_loss(model_pred.float(), target.float(), reduction="none")
                     loss = loss.mean(dim=list(range(1, len(loss.shape)))) * mse_loss_weights
                     loss = loss.mean()
@@ -1048,7 +1082,7 @@ def main():
     # Create the pipeline using the trained modules and save it.
     accelerator.wait_for_everyone()
     if accelerator.is_main_process:
-        unet = accelerator.unwrap_model(unet)
+        unet = unwrap_model(unet)
         if args.use_ema:
             ema_unet.copy_to(unet.parameters())
 
@@ -1058,8 +1092,10 @@ def main():
             vae=vae,
             unet=unet,
             revision=args.revision,
+            variant=args.variant,
         )
-        pipeline.save_pretrained(args.output_dir)
+        # TODO(yeounoh) fix checkpoint saving error
+        #pipeline.save_pretrained(args.output_dir)
 
         # Run a final round of inference.
         images = []
