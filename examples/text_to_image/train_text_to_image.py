@@ -48,6 +48,7 @@ from diffusers.training_utils import EMAModel
 from diffusers.utils import check_min_version, deprecate, is_wandb_available
 from diffusers.utils.import_utils import is_xformers_available
 
+import torch_xla.debug.metrics as met
 
 if is_wandb_available():
     import wandb
@@ -482,6 +483,14 @@ def parse_args():
             " more information see https://huggingface.co/docs/accelerate/v0.17.0/en/package_reference/accelerator#accelerate.Accelerator"
         ),
     )
+    parser.add_argument(
+        "--xla_input_sharding",
+        action="store_true",
+        help=(
+           "Wrpas dataloader with MpDeviceLoader with input sharding support."
+           " It also looks at `XLA_AUTO_SPMD_MESH` to determine the input batch sharding strategy."
+        ),
+    )
 
     args = parser.parse_args()
     env_local_rank = int(os.environ.get("LOCAL_RANK", -1))
@@ -808,6 +817,34 @@ def main():
         batch_size=args.train_batch_size,
         num_workers=args.dataloader_num_workers,
     )
+    # Wraps with XLA MpDeviceLoader if `--xla_input_sharding` is set.
+    import torch_xla.core.xla_model as xm
+    import torch_xla.experimental.xla_sharding as xs
+    import torch_xla.runtime as xr
+    import torch_xla.distributed.parallel_loader as pl
+    num_devices = xr.global_runtime_device_count()
+    device_ids = np.arange(num_devices)
+    def get_mesh(ici_mesh_shape):
+        return xs.Mesh(device_ids, ici_mesh_shape)
+
+    sharding_spec = None
+    if args.xla_input_sharding:
+        auto_mesh = os.getenv('XLA_AUTO_SPMD_MESH')
+        print('--xla_input_sharding with XLA_AUTO_SPMD_MESH=', auto_mesh)
+        if auto_mesh:
+            mesh_shape = tuple(list(map(int,auto_mesh.split(','))))
+            mesh = get_mesh(mesh_shape)
+            if mesh_shape[0] == 1 or mesh_shape[1] == 1:
+              sharding_spec = xs.ShardingSpec(mesh, (0, 1))
+            else:
+              sharding_spec = xs.ShardingSpec(mesh, (0, None))
+        else:
+            mesh = get_mesh((num_devices, 1))
+            sharding_spec = xs.ShardingSpec(mesh, (0, 1))
+        print('input sharding_spec=', sharding_spec)
+        train_dataloader = pl.MpDeviceLoader(train_dataloader, xm.xla_device(), input_sharding=sharding_spec)
+
+
 
     # Scheduler and math around the number of training steps.
     overrode_max_train_steps = False
@@ -905,6 +942,11 @@ def main():
         unet.train()
         train_loss = 0.0
         for step, batch in enumerate(train_dataloader):
+            if step == profile_step and epoch == profile_epoch:
+                import torch_xla.debug.profiler as xp
+                import tempfile
+                trace = lambda: xp.trace('127.0.0.1:9012', profile_logdir or tempfile.mkdtemp(), profile_duration or 20000)
+                Thread(target=trace).start()
             # Skip steps until we reach the resumed step
             if args.resume_from_checkpoint and epoch == first_epoch and step < resume_step:
                 if step % args.gradient_accumulation_steps == 0:
@@ -973,8 +1015,10 @@ def main():
                     loss = loss.mean()
 
                 # Gather the losses across all processes for logging (if we use distributed training).
-                avg_loss = accelerator.gather(loss.repeat(args.train_batch_size)).mean()
-                train_loss += avg_loss.item() / args.gradient_accumulation_steps
+                # avg_loss = accelerator.gather(loss.repeat(args.train_batch_size)).mean()
+                # train_loss += avg_loss.item() / args.gradient_accumulation_steps
+                print('accelerator.sync_gradients=',accelerator.sync_gradients)
+                accelerator.sync_gradients = False
 
                 # Backpropagate
                 accelerator.backward(loss)
@@ -1023,6 +1067,7 @@ def main():
             progress_bar.set_postfix(**logs)
 
             if global_step >= args.max_train_steps:
+                print(met.short_metrics_report())
                 break
 
         if accelerator.is_main_process:
