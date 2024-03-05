@@ -973,10 +973,8 @@ def main():
                     loss = loss.mean()
 
                 # Gather the losses across all processes for logging (if we use distributed training).
-                # avg_loss = accelerator.gather(loss.repeat(args.train_batch_size)).mean()
-                # train_loss += avg_loss.item() / args.gradient_accumulation_steps
-                print('accelerator.sync_gradients=', accelerator.sync_gradients)
-                accelerator.sync_gradients = False
+                avg_loss = accelerator.gather(loss.repeat(args.train_batch_size)).mean()
+                train_loss += avg_loss.item() / args.gradient_accumulation_steps
 
                 # Backpropagate
                 accelerator.backward(loss)
@@ -1020,14 +1018,11 @@ def main():
                         save_path = os.path.join(args.output_dir, f"checkpoint-{global_step}")
                         accelerator.save_state(save_path)
                         logger.info(f"Saved state to {save_path}")
-            if step % 20 == 0:
-              logs = {"step_loss": loss.detach().item(), "lr": lr_scheduler.get_last_lr()[0]}
-              progress_bar.set_postfix(**logs)
+
+            logs = {"step_loss": loss.detach().item(), "lr": lr_scheduler.get_last_lr()[0]}
+            progress_bar.set_postfix(**logs)
 
             if global_step >= args.max_train_steps:
-                import torch_xla.debug.metrics as met
-                # For short report that only contains a few key metrics.
-                print(met.short_metrics_report())
                 break
 
         if accelerator.is_main_process:
