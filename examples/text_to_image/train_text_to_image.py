@@ -20,6 +20,7 @@ import os
 import random
 import shutil
 from pathlib import Path
+from threading import Thread
 
 import accelerate
 import datasets
@@ -934,6 +935,9 @@ def main():
             first_epoch = global_step // num_update_steps_per_epoch
             resume_step = resume_global_step % (num_update_steps_per_epoch * args.gradient_accumulation_steps)
 
+    import torch_xla.debug.profiler as xp
+    server = xp.start_server(9012)
+    logger.info('Profiling server started: {str(server)}')
     profile_step = int(os.environ.get('PROFILE_STEP', -1))
     profile_epoch = int(os.environ.get('PROFILE_EPOCH', -1))
     profile_duration = int(os.environ.get('PROFILE_DURATION_MS', 20000))
@@ -1068,8 +1072,9 @@ def main():
                         accelerator.save_state(save_path)
                         logger.info(f"Saved state to {save_path}")
 
-            logs = {"step_loss": loss.detach().item(), "lr": lr_scheduler.get_last_lr()[0]}
-            progress_bar.set_postfix(**logs)
+            if step % 20 == 0:
+              logs = {"step_loss": loss.detach().item(), "lr": lr_scheduler.get_last_lr()[0]}
+              progress_bar.set_postfix(**logs)
 
             if global_step >= args.max_train_steps:
                 print(met.short_metrics_report())
