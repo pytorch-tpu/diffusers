@@ -1114,7 +1114,7 @@ def main():
             unet=unet,
             revision=args.revision,
         )
-        pipeline.save_pretrained(args.output_dir)
+        #pipeline.save_pretrained(args.output_dir)
 
         # Run a final round of inference.
         images = []
