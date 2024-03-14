@@ -82,6 +82,7 @@ def main(args):
     # res = while_loop(cond_fn, body_fn, (init, limit_value))
     from torch_xla.experimental.fori_loop import _xla_while_loop
     res = _xla_while_loop(cond_fn, body_fn, (init, limit_value))
+    print("result of while_loop: ", res)
     # expected = _fake_while_loop(cond_fn, body_fn, (init, limit_value))
     # self.assertEqual(expected, res)
 
