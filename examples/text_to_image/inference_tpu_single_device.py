@@ -79,7 +79,9 @@ def main(args):
     init = torch.tensor([3], dtype=torch.int32, device=device)
     # iters = 3
     limit_value = torch.tensor([0], dtype=torch.int32, device=device)
-    res = while_loop(cond_fn, body_fn, (init, limit_value))
+    # res = while_loop(cond_fn, body_fn, (init, limit_value))
+    from torch_xla.experimental.fori_loop import _xla_while_loop
+    res = _xla_while_loop(cond_fn, body_fn, (init, limit_value))
     # expected = _fake_while_loop(cond_fn, body_fn, (init, limit_value))
     # self.assertEqual(expected, res)
 
