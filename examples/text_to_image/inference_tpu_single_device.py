@@ -73,7 +73,7 @@ def main(args):
                   height=512, # height,
                   width=512, # width,
                   ).images[0]
-      print(f'Step {i} inference time {time()-start} sec', flush=True)
+    #   print(f'Step {i} inference time {time()-start} sec', flush=True)
       return (torch.sub(init, one_value), two_value)
     
     start = time()
