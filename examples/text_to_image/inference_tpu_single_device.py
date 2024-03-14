@@ -12,7 +12,7 @@ def parser(args):
     parser.add_argument(
     '--batch-size',
     type=int,
-    default=8,
+    default=2, # 8,
     help='Number of images to generate'
     )
 
@@ -26,7 +26,7 @@ def parser(args):
     parser.add_argument(
     '--inf-steps',
     type=int,
-    default=30,
+    default=2, # 30,
     help='Number of itterations to run the benchmark.'
     )
 
@@ -62,11 +62,11 @@ def main(args):
       one_value = torch.ones(1, dtype=torch.int32, device=device)
       two_value = limit_value.clone()
       # start = time()
-      image = pipe(["a photo of an astronaut riding a horse on mars"], # prompts,
-                  num_inference_steps=2, # inference_steps,
-                  height=512, # height,
-                  width=512, # width,
-                  ).images[0]
+    #   image = pipe(["a photo of an astronaut riding a horse on mars"], # prompts,
+    #               num_inference_steps=2, # inference_steps,
+    #               height=512, # height,
+    #               width=512, # width,
+    #               ).images[0]
     #   print(f'Step {i} inference time {time()-start} sec', flush=True)
       return (torch.sub(init, one_value), two_value)
 
