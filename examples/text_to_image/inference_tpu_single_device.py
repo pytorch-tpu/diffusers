@@ -68,6 +68,11 @@ def main(args):
         )
     # device = xm.xla_device()
       pipe.to(device)
+      image = pipe(["a photo of an astronaut riding a horse on mars"], # prompts,
+                  num_inference_steps=2, # inference_steps,
+                  height=512, # height,
+                  width=512, # width,
+                  )
     #   image = pipe(["a photo of an astronaut riding a horse on mars"], # prompts,
     #               num_inference_steps=2, # inference_steps,
     #               height=512, # height,
