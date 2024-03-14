@@ -50,6 +50,11 @@ from diffusers.utils import check_min_version, deprecate, is_wandb_available
 from diffusers.utils.import_utils import is_xformers_available
 
 import torch_xla.debug.metrics as met
+import torch_xla.runtime as xr
+import torch_xla.core.xla_model as xm
+import torch_xla.distributed.spmd as xs
+import torch_xla.distributed.parallel_loader as pl
+from torch.distributed._tensor import DeviceMesh, distribute_module
 
 if is_wandb_available():
     import wandb
@@ -599,6 +604,13 @@ def main():
         args.pretrained_model_name_or_path, subfolder="unet", revision=args.non_ema_revision
     )
 
+    # enable auto-sharding via DTensor API
+    device_count = xr.global_runtime_device_count()
+    device_mesh = DeviceMesh("xla", list(range(device_count))) 
+    from torch_xla.distributed.spmd import auto_policy
+    unet = distribute_module(unet, device_mesh, auto_policy)
+    
+
     # Freeze vae and text_encoder
     vae.requires_grad_(False)
     text_encoder.requires_grad_(False)
@@ -819,10 +831,6 @@ def main():
         num_workers=args.dataloader_num_workers,
     )
     # Wraps with XLA MpDeviceLoader if `--xla_input_sharding` is set.
-    import torch_xla.core.xla_model as xm
-    import torch_xla.experimental.xla_sharding as xs
-    import torch_xla.runtime as xr
-    import torch_xla.distributed.parallel_loader as pl
     num_devices = xr.global_runtime_device_count()
     device_ids = np.arange(num_devices)
     def get_mesh(ici_mesh_shape):
@@ -1077,7 +1085,6 @@ def main():
               progress_bar.set_postfix(**logs)
 
             if global_step >= args.max_train_steps:
-                print(met.short_metrics_report())
                 break
 
         if accelerator.is_main_process:
@@ -1145,9 +1152,11 @@ def main():
                 commit_message="End of training",
                 ignore_patterns=["step_*", "epoch_*"],
             )
-
+    
+    print(met.metrics_report())
     accelerator.end_training()
 
 
 if __name__ == "__main__":
+    xr.use_spmd()
     main()
