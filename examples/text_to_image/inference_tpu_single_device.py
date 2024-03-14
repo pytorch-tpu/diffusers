@@ -77,23 +77,24 @@ def main(args):
       return (torch.sub(init, one_value), two_value)
     
     start = time()
-    init = torch.tensor([3], dtype=torch.int32, device=device)
     # iters = 3
+    init = torch.tensor([3], dtype=torch.int32, device=device)
     limit_value = torch.tensor([0], dtype=torch.int32, device=device)
     # res = while_loop(cond_fn, body_fn, (init, limit_value))
     from torch_xla.experimental.fori_loop import _xla_while_loop
     res = _xla_while_loop(cond_fn, body_fn, (init, limit_value))
-    print(f'Call pipeline with _xla_while_loop used {time()-start} sec', flush=True)
+    print(f'Call pipeline with _xla_while_loop for three times used {time()-start} sec', flush=True)
     print("result of while_loop: ", res)
     # expected = _fake_while_loop(cond_fn, body_fn, (init, limit_value))
     # self.assertEqual(expected, res)
 
     start2 = time()
-    pipe2 = DiffusionPipeline.from_pretrained(
-        "stabilityai/stable-diffusion-xl-base-0.9",
-        use_safetensors=True,
-        )
-    print(f'Call pipeline without _xla_while_loop used {time()-start2} sec', flush=True)
+    for i in range(iters):
+        pipe2 = DiffusionPipeline.from_pretrained(
+            "stabilityai/stable-diffusion-xl-base-0.9",
+            use_safetensors=True,
+            )
+    print(f'Call pipeline without _xla_while_loop for three times used {time()-start2} sec', flush=True)
 
     # iters = 1 # 15
     # print('starting inference', flush=True)
