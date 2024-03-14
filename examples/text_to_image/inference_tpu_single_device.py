@@ -59,8 +59,8 @@ def main(args):
       return limit_value[0] <= init[0]
 
     def body_fn(init, limit_value):
-      one_value = torch.ones(1, dtype=torch.int32, device=device)
-      two_value = limit_value.clone()
+    #   one_value = torch.ones(1, dtype=torch.int32, device=device)
+    #   two_value = limit_value.clone()
       # start = time()
       pipe = DiffusionPipeline.from_pretrained(
         "stabilityai/stable-diffusion-xl-base-0.9",
@@ -80,6 +80,8 @@ def main(args):
     #               ).images[0]
     #   print("type of image: ", type(image))
     #   print(f'Step {i} inference time {time()-start} sec', flush=True)
+      one_value = torch.ones(1, dtype=torch.int32, device=device)
+      two_value = limit_value.clone()
       return (torch.sub(init, one_value), two_value)
     
     start = time()
