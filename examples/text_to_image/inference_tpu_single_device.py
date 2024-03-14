@@ -42,9 +42,9 @@ def main(args):
     device = xm.xla_device()
     pipe.to(device)
 
-    bs = args.batch_size
-    inference_steps = args.inf_steps
-    height = width = args.width
+    bs = args.batch_size # 1
+    inference_steps = args.inf_steps # 2
+    height = width = args.width # 512
 
     prompts = ["a photo of an astronaut riding a horse on mars"] * bs
     print(f'batch size = {bs}, inference steps = {inference_steps}',
@@ -52,16 +52,41 @@ def main(args):
           flush=True
           )
 
-    iters = 15
-    print('starting inference', flush=True)
-    for i in range(iters):
-        start = time()
-        image = pipe(prompts,
-                    num_inference_steps=inference_steps,
-                    height=height,
-                    width=width,
-                    ).images[0]
-        print(f'Step {i} inference time {time()-start} sec', flush=True)
+    import torch
+    import torch_xla.experimental.fori_loop
+    from torch._higher_order_ops.while_loop import while_loop
+    def cond_fn(init, limit_value):
+      return limit_value[0] <= init[0]
+
+    def body_fn(init, limit_value):
+      one_value = torch.ones(1, dtype=torch.int32, device=device)
+      two_value = limit_value.clone()
+      # start = time()
+      image = pipe(["a photo of an astronaut riding a horse on mars"], # prompts,
+                  num_inference_steps=2, # inference_steps,
+                  height=512, # height,
+                  width=512, # width,
+                  ).images[0]
+    #   print(f'Step {i} inference time {time()-start} sec', flush=True)
+      return (torch.sub(init, one_value), two_value)
+
+    init = torch.tensor([3], dtype=torch.int32, device=device)
+    # iters = 3
+    limit_value = torch.tensor([0], dtype=torch.int32, device=device)
+    res = while_loop(cond_fn, body_fn, (init, limit_value))
+    # expected = _fake_while_loop(cond_fn, body_fn, (init, limit_value))
+    # self.assertEqual(expected, res)
+
+    # iters = 1 # 15
+    # print('starting inference', flush=True)
+    # for i in range(iters):
+    #     start = time()
+    #     image = pipe(prompts,
+    #                 num_inference_steps=inference_steps,
+    #                 height=height,
+    #                 width=width,
+    #                 ).images[0]
+    #     print(f'Step {i} inference time {time()-start} sec', flush=True)
 
 
 if __name__ == '__main__':
