@@ -72,7 +72,7 @@ def main(args):
                   num_inference_steps=2, # inference_steps,
                   height=512, # height,
                   width=512, # width,
-                  )
+                  ).images[0]
     #   image = pipe(["a photo of an astronaut riding a horse on mars"], # prompts,
     #               num_inference_steps=2, # inference_steps,
     #               height=512, # height,
