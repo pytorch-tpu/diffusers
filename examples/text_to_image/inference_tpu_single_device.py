@@ -35,12 +35,12 @@ def parser(args):
 
 def main(args):
     server = xp.start_server(9012)
-    pipe = DiffusionPipeline.from_pretrained(
-        "stabilityai/stable-diffusion-xl-base-0.9",
-        use_safetensors=True,
-        )
+    # pipe = DiffusionPipeline.from_pretrained(
+    #     "stabilityai/stable-diffusion-xl-base-0.9",
+    #     use_safetensors=True,
+    #     )
     device = xm.xla_device()
-    pipe.to(device)
+    # pipe.to(device)
 
     bs = args.batch_size # 1
     inference_steps = args.inf_steps # 2
@@ -62,6 +62,12 @@ def main(args):
       one_value = torch.ones(1, dtype=torch.int32, device=device)
       two_value = limit_value.clone()
       # start = time()
+      pipe = DiffusionPipeline.from_pretrained(
+        "stabilityai/stable-diffusion-xl-base-0.9",
+        use_safetensors=True,
+        )
+    # device = xm.xla_device()
+      pipe.to(device)
     #   image = pipe(["a photo of an astronaut riding a horse on mars"], # prompts,
     #               num_inference_steps=2, # inference_steps,
     #               height=512, # height,
