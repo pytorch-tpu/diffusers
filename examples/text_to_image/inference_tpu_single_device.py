@@ -68,12 +68,12 @@ def main(args):
         )
     # device = xm.xla_device()
       pipe.to(device)
-      image = pipe(["a photo of an astronaut riding a horse on mars"], # prompts,
-                  num_inference_steps=2, # inference_steps,
-                  height=512, # height,
-                  width=512, # width,
-                  ).images[0]
-      print("type of image: ", type(image))
+    #   image = pipe(["a photo of an astronaut riding a horse on mars"], # prompts,
+    #               num_inference_steps=2, # inference_steps,
+    #               height=512, # height,
+    #               width=512, # width,
+    #               ).images[0]
+    #   print("type of image: ", type(image))
     #   print(f'Step {i} inference time {time()-start} sec', flush=True)
       return (torch.sub(init, one_value), two_value)
     
