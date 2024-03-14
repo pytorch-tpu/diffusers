@@ -89,6 +89,7 @@ def main(args):
     # self.assertEqual(expected, res)
 
     start2 = time()
+    iters = 3
     for i in range(iters):
         pipe2 = DiffusionPipeline.from_pretrained(
             "stabilityai/stable-diffusion-xl-base-0.9",
