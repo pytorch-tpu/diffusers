@@ -103,6 +103,12 @@ def main(args):
             "stabilityai/stable-diffusion-xl-base-0.9",
             use_safetensors=True,
             )
+        pipe2.to(device)
+        image2 = pipe2(["a photo of an astronaut riding a horse on mars"], # prompts,
+                  num_inference_steps=2, # inference_steps,
+                  height=512, # height,
+                  width=512, # width,
+                  ).images[0]
     print(f'Call pipeline without _xla_while_loop for three times used {time()-start2} sec', flush=True)
 
     # iters = 1 # 15
