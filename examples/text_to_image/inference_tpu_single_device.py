@@ -51,6 +51,28 @@ def main(args):
           f'height = width = {width}',
           flush=True
           )
+        
+    pipe = DiffusionPipeline.from_pretrained(
+            "stabilityai/stable-diffusion-xl-base-0.9",
+            use_safetensors=True,
+            )
+    pipe.to(device)
+
+    start2 = time()
+    iters = 3
+    for i in range(iters):
+        # pipe2 = DiffusionPipeline.from_pretrained(
+        #     "stabilityai/stable-diffusion-xl-base-0.9",
+        #     use_safetensors=True,
+        #     )
+        # pipe2.to(device)
+        image = pipe(["a photo of an astronaut riding a horse on mars"], # prompts,
+                  num_inference_steps=2, # inference_steps,
+                  height=512, # height,
+                  width=512, # width,
+                  ).images[0]
+    print(f'Call pipeline without _xla_while_loop for three times used {time()-start2} sec', flush=True)
+
 
     import torch
     import torch_xla.experimental.fori_loop
@@ -62,12 +84,12 @@ def main(args):
     #   one_value = torch.ones(1, dtype=torch.int32, device=device)
     #   two_value = limit_value.clone()
       # start = time()
-      pipe = DiffusionPipeline.from_pretrained(
-        "stabilityai/stable-diffusion-xl-base-0.9",
-        use_safetensors=True,
-        )
-    # device = xm.xla_device()
-      pipe.to(device)
+    #   pipe = DiffusionPipeline.from_pretrained(
+    #     "stabilityai/stable-diffusion-xl-base-0.9",
+    #     use_safetensors=True,
+    #     )
+    # # device = xm.xla_device()
+    #   pipe.to(device)
       image = pipe(["a photo of an astronaut riding a horse on mars"], # prompts,
                   num_inference_steps=2, # inference_steps,
                   height=512, # height,
@@ -96,20 +118,20 @@ def main(args):
     # expected = _fake_while_loop(cond_fn, body_fn, (init, limit_value))
     # self.assertEqual(expected, res)
 
-    start2 = time()
-    iters = 3
-    for i in range(iters):
-        pipe2 = DiffusionPipeline.from_pretrained(
-            "stabilityai/stable-diffusion-xl-base-0.9",
-            use_safetensors=True,
-            )
-        pipe2.to(device)
-        image2 = pipe2(["a photo of an astronaut riding a horse on mars"], # prompts,
-                  num_inference_steps=2, # inference_steps,
-                  height=512, # height,
-                  width=512, # width,
-                  ).images[0]
-    print(f'Call pipeline without _xla_while_loop for three times used {time()-start2} sec', flush=True)
+    # start2 = time()
+    # iters = 3
+    # for i in range(iters):
+    #     # pipe2 = DiffusionPipeline.from_pretrained(
+    #     #     "stabilityai/stable-diffusion-xl-base-0.9",
+    #     #     use_safetensors=True,
+    #     #     )
+    #     pipe2.to(device)
+    #     image2 = pipe2(["a photo of an astronaut riding a horse on mars"], # prompts,
+    #               num_inference_steps=2, # inference_steps,
+    #               height=512, # height,
+    #               width=512, # width,
+    #               ).images[0]
+    # print(f'Call pipeline without _xla_while_loop for three times used {time()-start2} sec', flush=True)
 
     # iters = 1 # 15
     # print('starting inference', flush=True)
