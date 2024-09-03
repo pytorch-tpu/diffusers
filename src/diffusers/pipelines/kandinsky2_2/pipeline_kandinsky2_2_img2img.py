@@ -1,4 +1,4 @@
-# Copyright 2023 The HuggingFace Team. All rights reserved.
+# Copyright 2024 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,22 +12,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Callable, List, Optional, Union
+from typing import Callable, Dict, List, Optional, Union
 
 import numpy as np
-import PIL
+import PIL.Image
 import torch
 from PIL import Image
 
 from ...models import UNet2DConditionModel, VQModel
 from ...schedulers import DDPMScheduler
-from ...utils import (
-    is_accelerate_available,
-    is_accelerate_version,
-    logging,
-    randn_tensor,
-    replace_example_docstring,
-)
+from ...utils import deprecate, logging
+from ...utils.torch_utils import randn_tensor
 from ..pipeline_utils import DiffusionPipeline, ImagePipelineOutput
 
 
@@ -110,6 +105,9 @@ class KandinskyV22Img2ImgPipeline(DiffusionPipeline):
             MoVQ Decoder to generate the image from the latents.
     """
 
+    model_cpu_offload_seq = "unet->movq"
+    _callback_tensor_inputs = ["latents", "image_embeds", "negative_image_embeds"]
+
     def __init__(
         self,
         unet: UNet2DConditionModel,
@@ -177,39 +175,24 @@ class KandinskyV22Img2ImgPipeline(DiffusionPipeline):
 
         return latents
 
-    # Copied from diffusers.pipelines.kandinsky2_2.pipeline_kandinsky2_2.KandinskyV22Pipeline.enable_model_cpu_offload
-    def enable_model_cpu_offload(self, gpu_id=0):
-        r"""
-        Offloads all models to CPU using accelerate, reducing memory usage with a low impact on performance. Compared
-        to `enable_sequential_cpu_offload`, this method moves one whole model at a time to the GPU when its `forward`
-        method is called, and the model remains in GPU until the next model runs. Memory savings are lower than with
-        `enable_sequential_cpu_offload`, but performance is much better due to the iterative execution of the `unet`.
-        """
-        if is_accelerate_available() and is_accelerate_version(">=", "0.17.0.dev0"):
-            from accelerate import cpu_offload_with_hook
-        else:
-            raise ImportError("`enable_model_cpu_offload` requires `accelerate v0.17.0` or higher.")
+    @property
+    def guidance_scale(self):
+        return self._guidance_scale
 
-        device = torch.device(f"cuda:{gpu_id}")
+    @property
+    def do_classifier_free_guidance(self):
+        return self._guidance_scale > 1
 
-        if self.device.type != "cpu":
-            self.to("cpu", silence_dtype_warnings=True)
-            torch.cuda.empty_cache()  # otherwise we don't see the memory savings (but they probably exist)
-
-        hook = None
-        for cpu_offloaded_model in [self.unet, self.movq]:
-            _, hook = cpu_offload_with_hook(cpu_offloaded_model, device, prev_module_hook=hook)
-
-        # We'll offload the last model manually.
-        self.final_offload_hook = hook
+    @property
+    def num_timesteps(self):
+        return self._num_timesteps
 
     @torch.no_grad()
-    @replace_example_docstring(EXAMPLE_DOC_STRING)
     def __call__(
         self,
-        image_embeds: Union[torch.FloatTensor, List[torch.FloatTensor]],
-        image: Union[torch.FloatTensor, PIL.Image.Image, List[torch.FloatTensor], List[PIL.Image.Image]],
-        negative_image_embeds: Union[torch.FloatTensor, List[torch.FloatTensor]],
+        image_embeds: Union[torch.Tensor, List[torch.Tensor]],
+        image: Union[torch.Tensor, PIL.Image.Image, List[torch.Tensor], List[PIL.Image.Image]],
+        negative_image_embeds: Union[torch.Tensor, List[torch.Tensor]],
         height: int = 512,
         width: int = 512,
         num_inference_steps: int = 100,
@@ -218,19 +201,20 @@ class KandinskyV22Img2ImgPipeline(DiffusionPipeline):
         num_images_per_prompt: int = 1,
         generator: Optional[Union[torch.Generator, List[torch.Generator]]] = None,
         output_type: Optional[str] = "pil",
-        callback: Optional[Callable[[int, int, torch.FloatTensor], None]] = None,
-        callback_steps: int = 1,
         return_dict: bool = True,
+        callback_on_step_end: Optional[Callable[[int, int, Dict], None]] = None,
+        callback_on_step_end_tensor_inputs: List[str] = ["latents"],
+        **kwargs,
     ):
         """
         Function invoked when calling the pipeline for generation.
 
         Args:
-            image_embeds (`torch.FloatTensor` or `List[torch.FloatTensor]`):
+            image_embeds (`torch.Tensor` or `List[torch.Tensor]`):
                 The clip image embeddings for text prompt, that will be used to condition the image generation.
-            image (`torch.FloatTensor`, `PIL.Image.Image`, `np.ndarray`, `List[torch.FloatTensor]`, `List[PIL.Image.Image]`, or `List[np.ndarray]`):
+            image (`torch.Tensor`, `PIL.Image.Image`, `np.ndarray`, `List[torch.Tensor]`, `List[PIL.Image.Image]`, or `List[np.ndarray]`):
                 `Image`, or tensor representing an image batch, that will be used as the starting point for the
-                process. Can also accpet image latents as `image`, if passing latents directly, it will not be encoded
+                process. Can also accept image latents as `image`, if passing latents directly, it will not be encoded
                 again.
             strength (`float`, *optional*, defaults to 0.8):
                 Conceptually, indicates how much to transform the reference `image`. Must be between 0 and 1. `image`
@@ -238,7 +222,7 @@ class KandinskyV22Img2ImgPipeline(DiffusionPipeline):
                 denoising steps depends on the amount of noise initially added. When `strength` is 1, added noise will
                 be maximum and the denoising process will run for the full number of iterations specified in
                 `num_inference_steps`. A value of 1, therefore, essentially ignores `image`.
-            negative_image_embeds (`torch.FloatTensor` or `List[torch.FloatTensor]`):
+            negative_image_embeds (`torch.Tensor` or `List[torch.Tensor]`):
                 The clip image embeddings for negative text prompt, will be used to condition the image generation.
             height (`int`, *optional*, defaults to 512):
                 The height in pixels of the generated image.
@@ -261,23 +245,50 @@ class KandinskyV22Img2ImgPipeline(DiffusionPipeline):
             output_type (`str`, *optional*, defaults to `"pil"`):
                 The output format of the generate image. Choose between: `"pil"` (`PIL.Image.Image`), `"np"`
                 (`np.array`) or `"pt"` (`torch.Tensor`).
-            callback (`Callable`, *optional*):
-                A function that calls every `callback_steps` steps during inference. The function is called with the
-                following arguments: `callback(step: int, timestep: int, latents: torch.FloatTensor)`.
-            callback_steps (`int`, *optional*, defaults to 1):
-                The frequency at which the `callback` function is called. If not specified, the callback is called at
-                every step.
             return_dict (`bool`, *optional*, defaults to `True`):
                 Whether or not to return a [`~pipelines.ImagePipelineOutput`] instead of a plain tuple.
+            callback_on_step_end (`Callable`, *optional*):
+                A function that calls at the end of each denoising steps during the inference. The function is called
+                with the following arguments: `callback_on_step_end(self: DiffusionPipeline, step: int, timestep: int,
+                callback_kwargs: Dict)`. `callback_kwargs` will include a list of all tensors as specified by
+                `callback_on_step_end_tensor_inputs`.
+            callback_on_step_end_tensor_inputs (`List`, *optional*):
+                The list of tensor inputs for the `callback_on_step_end` function. The tensors specified in the list
+                will be passed as `callback_kwargs` argument. You will only be able to include variables listed in the
+                `._callback_tensor_inputs` attribute of your pipeline class.
 
         Examples:
 
         Returns:
             [`~pipelines.ImagePipelineOutput`] or `tuple`
         """
+
+        callback = kwargs.pop("callback", None)
+        callback_steps = kwargs.pop("callback_steps", None)
+
+        if callback is not None:
+            deprecate(
+                "callback",
+                "1.0.0",
+                "Passing `callback` as an input argument to `__call__` is deprecated, consider use `callback_on_step_end`",
+            )
+        if callback_steps is not None:
+            deprecate(
+                "callback_steps",
+                "1.0.0",
+                "Passing `callback_steps` as an input argument to `__call__` is deprecated, consider use `callback_on_step_end`",
+            )
+
+        if callback_on_step_end_tensor_inputs is not None and not all(
+            k in self._callback_tensor_inputs for k in callback_on_step_end_tensor_inputs
+        ):
+            raise ValueError(
+                f"`callback_on_step_end_tensor_inputs` has to be in {self._callback_tensor_inputs}, but found {[k for k in callback_on_step_end_tensor_inputs if k not in self._callback_tensor_inputs]}"
+            )
+
         device = self._execution_device
 
-        do_classifier_free_guidance = guidance_scale > 1.0
+        self._guidance_scale = guidance_scale
 
         if isinstance(image_embeds, list):
             image_embeds = torch.cat(image_embeds, dim=0)
@@ -285,7 +296,7 @@ class KandinskyV22Img2ImgPipeline(DiffusionPipeline):
         if isinstance(negative_image_embeds, list):
             negative_image_embeds = torch.cat(negative_image_embeds, dim=0)
 
-        if do_classifier_free_guidance:
+        if self.do_classifier_free_guidance:
             image_embeds = image_embeds.repeat_interleave(num_images_per_prompt, dim=0)
             negative_image_embeds = negative_image_embeds.repeat_interleave(num_images_per_prompt, dim=0)
 
@@ -312,9 +323,10 @@ class KandinskyV22Img2ImgPipeline(DiffusionPipeline):
         latents = self.prepare_latents(
             latents, latent_timestep, batch_size, num_images_per_prompt, image_embeds.dtype, device, generator
         )
+        self._num_timesteps = len(timesteps)
         for i, t in enumerate(self.progress_bar(timesteps)):
             # expand the latents if we are doing classifier free guidance
-            latent_model_input = torch.cat([latents] * 2) if do_classifier_free_guidance else latents
+            latent_model_input = torch.cat([latents] * 2) if self.do_classifier_free_guidance else latents
 
             added_cond_kwargs = {"image_embeds": image_embeds}
             noise_pred = self.unet(
@@ -325,11 +337,11 @@ class KandinskyV22Img2ImgPipeline(DiffusionPipeline):
                 return_dict=False,
             )[0]
 
-            if do_classifier_free_guidance:
+            if self.do_classifier_free_guidance:
                 noise_pred, variance_pred = noise_pred.split(latents.shape[1], dim=1)
                 noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
                 _, variance_pred_text = variance_pred.chunk(2)
-                noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
+                noise_pred = noise_pred_uncond + self.guidance_scale * (noise_pred_text - noise_pred_uncond)
                 noise_pred = torch.cat([noise_pred, variance_pred_text], dim=1)
 
             if not (
@@ -346,26 +358,40 @@ class KandinskyV22Img2ImgPipeline(DiffusionPipeline):
                 generator=generator,
             )[0]
 
+            if callback_on_step_end is not None:
+                callback_kwargs = {}
+                for k in callback_on_step_end_tensor_inputs:
+                    callback_kwargs[k] = locals()[k]
+                callback_outputs = callback_on_step_end(self, i, t, callback_kwargs)
+
+                latents = callback_outputs.pop("latents", latents)
+                image_embeds = callback_outputs.pop("image_embeds", image_embeds)
+                negative_image_embeds = callback_outputs.pop("negative_image_embeds", negative_image_embeds)
+
             if callback is not None and i % callback_steps == 0:
-                callback(i, t, latents)
+                step_idx = i // getattr(self.scheduler, "order", 1)
+                callback(step_idx, t, latents)
 
-        # post-processing
-        image = self.movq.decode(latents, force_not_quantize=True)["sample"]
+        if output_type not in ["pt", "np", "pil", "latent"]:
+            raise ValueError(
+                f"Only the output types `pt`, `pil` ,`np` and `latent` are supported not output_type={output_type}"
+            )
 
-        # Offload last model to CPU
-        if hasattr(self, "final_offload_hook") and self.final_offload_hook is not None:
-            self.final_offload_hook.offload()
+        if not output_type == "latent":
+            # post-processing
+            image = self.movq.decode(latents, force_not_quantize=True)["sample"]
+            if output_type in ["np", "pil"]:
+                image = image * 0.5 + 0.5
+                image = image.clamp(0, 1)
+                image = image.cpu().permute(0, 2, 3, 1).float().numpy()
 
-        if output_type not in ["pt", "np", "pil"]:
-            raise ValueError(f"Only the output types `pt`, `pil` and `np` are supported not output_type={output_type}")
+            if output_type == "pil":
+                image = self.numpy_to_pil(image)
+        else:
+            image = latents
 
-        if output_type in ["np", "pil"]:
-            image = image * 0.5 + 0.5
-            image = image.clamp(0, 1)
-            image = image.cpu().permute(0, 2, 3, 1).float().numpy()
-
-        if output_type == "pil":
-            image = self.numpy_to_pil(image)
+        # Offload all models
+        self.maybe_free_model_hooks()
 
         if not return_dict:
             return (image,)

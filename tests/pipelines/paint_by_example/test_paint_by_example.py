@@ -1,5 +1,5 @@
 # coding=utf-8
-# Copyright 2023 HuggingFace Inc.
+# Copyright 2024 HuggingFace Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -24,8 +24,14 @@ from transformers import CLIPImageProcessor, CLIPVisionConfig
 
 from diffusers import AutoencoderKL, PaintByExamplePipeline, PNDMScheduler, UNet2DConditionModel
 from diffusers.pipelines.paint_by_example import PaintByExampleImageEncoder
-from diffusers.utils import floats_tensor, load_image, slow, torch_device
-from diffusers.utils.testing_utils import enable_full_determinism, require_torch_gpu
+from diffusers.utils.testing_utils import (
+    enable_full_determinism,
+    floats_tensor,
+    load_image,
+    nightly,
+    require_torch_gpu,
+    torch_device,
+)
 
 from ..pipeline_params import IMAGE_GUIDED_IMAGE_INPAINTING_BATCH_PARAMS, IMAGE_GUIDED_IMAGE_INPAINTING_PARAMS
 from ..test_pipelines_common import PipelineTesterMixin
@@ -111,7 +117,7 @@ class PaintByExamplePipelineFastTests(PipelineTesterMixin, unittest.TestCase):
             "generator": generator,
             "num_inference_steps": 2,
             "guidance_scale": 6.0,
-            "output_type": "numpy",
+            "output_type": "np",
         }
         return inputs
 
@@ -165,9 +171,15 @@ class PaintByExamplePipelineFastTests(PipelineTesterMixin, unittest.TestCase):
         super().test_inference_batch_single_identical(expected_max_diff=3e-3)
 
 
-@slow
+@nightly
 @require_torch_gpu
 class PaintByExamplePipelineIntegrationTests(unittest.TestCase):
+    def setUp(self):
+        # clean up the VRAM before each test
+        super().setUp()
+        gc.collect()
+        torch.cuda.empty_cache()
+
     def tearDown(self):
         # clean up the VRAM after each test
         super().tearDown()

@@ -4,7 +4,7 @@
 # Copyright (c) 2021 OpenAI
 # MIT License
 #
-# Copyright 2023 The HuggingFace Team. All rights reserved.
+# Copyright 2024 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -22,9 +22,9 @@ from typing import Dict, List, Optional, Tuple, Union
 
 import torch
 
-from ...models import AutoencoderKL, Transformer2DModel
+from ...models import AutoencoderKL, DiTTransformer2DModel
 from ...schedulers import KarrasDiffusionSchedulers
-from ...utils import randn_tensor
+from ...utils.torch_utils import randn_tensor
 from ..pipeline_utils import DiffusionPipeline, ImagePipelineOutput
 
 
@@ -36,17 +36,19 @@ class DiTPipeline(DiffusionPipeline):
     implemented for all pipelines (downloading, saving, running on a particular device, etc.).
 
     Parameters:
-        transformer ([`Transformer2DModel`]):
-            A class conditioned `Transformer2DModel` to denoise the encoded image latents.
+        transformer ([`DiTTransformer2DModel`]):
+            A class conditioned `DiTTransformer2DModel` to denoise the encoded image latents.
         vae ([`AutoencoderKL`]):
             Variational Auto-Encoder (VAE) model to encode and decode images to and from latent representations.
         scheduler ([`DDIMScheduler`]):
             A scheduler to be used in combination with `transformer` to denoise the encoded image latents.
     """
 
+    model_cpu_offload_seq = "transformer->vae"
+
     def __init__(
         self,
-        transformer: Transformer2DModel,
+        transformer: DiTTransformer2DModel,
         vae: AutoencoderKL,
         scheduler: KarrasDiffusionSchedulers,
         id2label: Optional[Dict[int, str]] = None,
@@ -165,7 +167,6 @@ class DiTPipeline(DiffusionPipeline):
 
         # set step values
         self.scheduler.set_timesteps(num_inference_steps)
-
         for t in self.progress_bar(self.scheduler.timesteps):
             if guidance_scale > 1:
                 half = latent_model_input[: len(latent_model_input) // 2]
@@ -225,6 +226,9 @@ class DiTPipeline(DiffusionPipeline):
 
         if output_type == "pil":
             samples = self.numpy_to_pil(samples)
+
+        # Offload all models
+        self.maybe_free_model_hooks()
 
         if not return_dict:
             return (samples,)

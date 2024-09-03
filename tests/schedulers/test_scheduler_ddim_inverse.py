@@ -7,7 +7,7 @@ from .test_schedulers import SchedulerCommonTest
 
 class DDIMInverseSchedulerTest(SchedulerCommonTest):
     scheduler_classes = (DDIMInverseScheduler,)
-    forward_default_kwargs = (("eta", 0.0), ("num_inference_steps", 50))
+    forward_default_kwargs = (("num_inference_steps", 50),)
 
     def get_scheduler_config(self, **kwargs):
         config = {
@@ -26,7 +26,7 @@ class DDIMInverseSchedulerTest(SchedulerCommonTest):
         scheduler_config = self.get_scheduler_config(**config)
         scheduler = scheduler_class(**scheduler_config)
 
-        num_inference_steps, eta = 10, 0.0
+        num_inference_steps = 10
 
         model = self.dummy_model()
         sample = self.dummy_sample_deter
@@ -35,7 +35,7 @@ class DDIMInverseSchedulerTest(SchedulerCommonTest):
 
         for t in scheduler.timesteps:
             residual = model(sample, t)
-            sample = scheduler.step(residual, t, sample, eta).prev_sample
+            sample = scheduler.step(residual, t, sample).prev_sample
 
         return sample
 
@@ -51,7 +51,7 @@ class DDIMInverseSchedulerTest(SchedulerCommonTest):
         scheduler_config = self.get_scheduler_config(steps_offset=1)
         scheduler = scheduler_class(**scheduler_config)
         scheduler.set_timesteps(5)
-        assert torch.equal(scheduler.timesteps, torch.LongTensor([-199, 1, 201, 401, 601]))
+        assert torch.equal(scheduler.timesteps, torch.LongTensor([1, 201, 401, 601, 801]))
 
     def test_betas(self):
         for beta_start, beta_end in zip([0.0001, 0.001, 0.01, 0.1], [0.002, 0.02, 0.2, 2]):
@@ -104,8 +104,8 @@ class DDIMInverseSchedulerTest(SchedulerCommonTest):
         result_sum = torch.sum(torch.abs(sample))
         result_mean = torch.mean(torch.abs(sample))
 
-        assert abs(result_sum.item() - 509.1079) < 1e-2
-        assert abs(result_mean.item() - 0.6629) < 1e-3
+        assert abs(result_sum.item() - 671.6816) < 1e-2
+        assert abs(result_mean.item() - 0.8746) < 1e-3
 
     def test_full_loop_with_v_prediction(self):
         sample = self.full_loop(prediction_type="v_prediction")
@@ -113,8 +113,8 @@ class DDIMInverseSchedulerTest(SchedulerCommonTest):
         result_sum = torch.sum(torch.abs(sample))
         result_mean = torch.mean(torch.abs(sample))
 
-        assert abs(result_sum.item() - 1029.129) < 1e-2
-        assert abs(result_mean.item() - 1.3400) < 1e-3
+        assert abs(result_sum.item() - 1394.2185) < 1e-2
+        assert abs(result_mean.item() - 1.8154) < 1e-3
 
     def test_full_loop_with_set_alpha_to_one(self):
         # We specify different beta, so that the first alpha is 0.99
@@ -122,8 +122,8 @@ class DDIMInverseSchedulerTest(SchedulerCommonTest):
         result_sum = torch.sum(torch.abs(sample))
         result_mean = torch.mean(torch.abs(sample))
 
-        assert abs(result_sum.item() - 259.8116) < 1e-2
-        assert abs(result_mean.item() - 0.3383) < 1e-3
+        assert abs(result_sum.item() - 539.9622) < 1e-2
+        assert abs(result_mean.item() - 0.7031) < 1e-3
 
     def test_full_loop_with_no_set_alpha_to_one(self):
         # We specify different beta, so that the first alpha is 0.99
@@ -131,5 +131,5 @@ class DDIMInverseSchedulerTest(SchedulerCommonTest):
         result_sum = torch.sum(torch.abs(sample))
         result_mean = torch.mean(torch.abs(sample))
 
-        assert abs(result_sum.item() - 239.055) < 1e-2
-        assert abs(result_mean.item() - 0.3113) < 1e-3
+        assert abs(result_sum.item() - 542.6722) < 1e-2
+        assert abs(result_mean.item() - 0.7066) < 1e-3

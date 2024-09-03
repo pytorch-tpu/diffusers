@@ -1,5 +1,5 @@
 # coding=utf-8
-# Copyright 2023 HuggingFace Inc.
+# Copyright 2024 HuggingFace Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -22,10 +22,13 @@ from torch import nn
 
 from diffusers.models.attention import GEGLU, AdaLayerNorm, ApproximateGELU
 from diffusers.models.embeddings import get_timestep_embedding
-from diffusers.models.lora import LoRACompatibleLinear
 from diffusers.models.resnet import Downsample2D, ResnetBlock2D, Upsample2D
-from diffusers.models.transformer_2d import Transformer2DModel
-from diffusers.utils import torch_device
+from diffusers.models.transformers.transformer_2d import Transformer2DModel
+from diffusers.utils.testing_utils import (
+    backend_manual_seed,
+    require_torch_accelerator_with_fp64,
+    torch_device,
+)
 
 
 class EmbeddingsTests(unittest.TestCase):
@@ -51,17 +54,6 @@ class EmbeddingsTests(unittest.TestCase):
         for grad in grad_mean:
             assert grad > prev_grad
             prev_grad = grad
-
-    def test_timestep_defaults(self):
-        embedding_dim = 16
-        timesteps = torch.arange(10)
-
-        t1 = get_timestep_embedding(timesteps, embedding_dim)
-        t2 = get_timestep_embedding(
-            timesteps, embedding_dim, flip_sin_to_cos=False, downscale_freq_shift=1, max_period=10_000
-        )
-
-        assert torch.allclose(t1.cpu(), t2.cpu(), 1e-3)
 
     def test_timestep_flip_sin_cos(self):
         embedding_dim = 16
@@ -315,8 +307,7 @@ class ResnetBlock2DTests(unittest.TestCase):
 class Transformer2DModelTests(unittest.TestCase):
     def test_spatial_transformer_default(self):
         torch.manual_seed(0)
-        if torch.cuda.is_available():
-            torch.cuda.manual_seed_all(0)
+        backend_manual_seed(torch_device, 0)
 
         sample = torch.randn(1, 32, 64, 64).to(torch_device)
         spatial_transformer_block = Transformer2DModel(
@@ -339,8 +330,7 @@ class Transformer2DModelTests(unittest.TestCase):
 
     def test_spatial_transformer_cross_attention_dim(self):
         torch.manual_seed(0)
-        if torch.cuda.is_available():
-            torch.cuda.manual_seed_all(0)
+        backend_manual_seed(torch_device, 0)
 
         sample = torch.randn(1, 64, 64, 64).to(torch_device)
         spatial_transformer_block = Transformer2DModel(
@@ -363,8 +353,7 @@ class Transformer2DModelTests(unittest.TestCase):
 
     def test_spatial_transformer_timestep(self):
         torch.manual_seed(0)
-        if torch.cuda.is_available():
-            torch.cuda.manual_seed_all(0)
+        backend_manual_seed(torch_device, 0)
 
         num_embeds_ada_norm = 5
 
@@ -401,8 +390,7 @@ class Transformer2DModelTests(unittest.TestCase):
 
     def test_spatial_transformer_dropout(self):
         torch.manual_seed(0)
-        if torch.cuda.is_available():
-            torch.cuda.manual_seed_all(0)
+        backend_manual_seed(torch_device, 0)
 
         sample = torch.randn(1, 32, 64, 64).to(torch_device)
         spatial_transformer_block = (
@@ -427,11 +415,10 @@ class Transformer2DModelTests(unittest.TestCase):
         )
         assert torch.allclose(output_slice.flatten(), expected_slice, atol=1e-3)
 
-    @unittest.skipIf(torch_device == "mps", "MPS does not support float64")
+    @require_torch_accelerator_with_fp64
     def test_spatial_transformer_discrete(self):
         torch.manual_seed(0)
-        if torch.cuda.is_available():
-            torch.cuda.manual_seed_all(0)
+        backend_manual_seed(torch_device, 0)
 
         num_embed = 5
 
@@ -483,7 +470,7 @@ class Transformer2DModelTests(unittest.TestCase):
 
         assert spatial_transformer_block.transformer_blocks[0].ff.net[0].__class__ == GEGLU
         assert spatial_transformer_block.transformer_blocks[0].ff.net[1].__class__ == nn.Dropout
-        assert spatial_transformer_block.transformer_blocks[0].ff.net[2].__class__ == LoRACompatibleLinear
+        assert spatial_transformer_block.transformer_blocks[0].ff.net[2].__class__ == nn.Linear
 
         dim = 32
         inner_dim = 128
@@ -507,7 +494,7 @@ class Transformer2DModelTests(unittest.TestCase):
 
         assert spatial_transformer_block.transformer_blocks[0].ff.net[0].__class__ == ApproximateGELU
         assert spatial_transformer_block.transformer_blocks[0].ff.net[1].__class__ == nn.Dropout
-        assert spatial_transformer_block.transformer_blocks[0].ff.net[2].__class__ == LoRACompatibleLinear
+        assert spatial_transformer_block.transformer_blocks[0].ff.net[2].__class__ == nn.Linear
 
         dim = 32
         inner_dim = 128

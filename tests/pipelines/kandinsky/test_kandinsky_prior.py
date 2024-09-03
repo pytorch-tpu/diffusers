@@ -1,5 +1,5 @@
 # coding=utf-8
-# Copyright 2023 HuggingFace Inc.
+# Copyright 2024 HuggingFace Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -28,8 +28,7 @@ from transformers import (
 )
 
 from diffusers import KandinskyPriorPipeline, PriorTransformer, UnCLIPScheduler
-from diffusers.utils import torch_device
-from diffusers.utils.testing_utils import enable_full_determinism, skip_mps
+from diffusers.utils.testing_utils import enable_full_determinism, skip_mps, torch_device
 
 from ..test_pipelines_common import PipelineTesterMixin
 
@@ -212,12 +211,13 @@ class KandinskyPriorPipelineFastTests(PipelineTesterMixin, unittest.TestCase):
         )[0]
 
         image_slice = image[0, -10:]
+
         image_from_tuple_slice = image_from_tuple[0, -10:]
 
         assert image.shape == (1, 32)
 
         expected_slice = np.array(
-            [-0.0532, 1.7120, 0.3656, -1.0852, -0.8946, -1.1756, 0.4348, 0.2482, 0.5146, -0.1156]
+            [-0.5948, 0.1875, -0.1523, -1.1995, -1.4061, -0.6367, -1.4607, -0.6406, 0.8793, -0.3891]
         )
 
         assert np.abs(image_slice.flatten() - expected_slice).max() < 1e-2
@@ -225,15 +225,7 @@ class KandinskyPriorPipelineFastTests(PipelineTesterMixin, unittest.TestCase):
 
     @skip_mps
     def test_inference_batch_single_identical(self):
-        test_max_difference = torch_device == "cpu"
-        relax_max_difference = True
-        test_mean_pixel_difference = False
-
-        self._test_inference_batch_single_identical(
-            test_max_difference=test_max_difference,
-            relax_max_difference=relax_max_difference,
-            test_mean_pixel_difference=test_mean_pixel_difference,
-        )
+        self._test_inference_batch_single_identical(expected_max_diff=1e-2)
 
     @skip_mps
     def test_attention_slicing_forward_pass(self):

@@ -1,5 +1,5 @@
 # coding=utf-8
-# Copyright 2023 HuggingFace Inc.
+# Copyright 2024 HuggingFace Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,22 +14,55 @@
 # limitations under the License.
 
 import inspect
+import json
+import os
 import tempfile
 import traceback
 import unittest
 import unittest.mock as mock
+import uuid
 from typing import Dict, List, Tuple
 
 import numpy as np
 import requests_mock
 import torch
+from accelerate.utils import compute_module_sizes
+from huggingface_hub import ModelCard, delete_repo
+from huggingface_hub.utils import is_jinja_available
 from requests.exceptions import HTTPError
 
 from diffusers.models import UNet2DConditionModel
-from diffusers.models.attention_processor import AttnProcessor, AttnProcessor2_0, XFormersAttnProcessor
+from diffusers.models.attention_processor import (
+    AttnProcessor,
+    AttnProcessor2_0,
+    AttnProcessorNPU,
+    XFormersAttnProcessor,
+)
 from diffusers.training_utils import EMAModel
-from diffusers.utils import logging, torch_device
-from diffusers.utils.testing_utils import CaptureLogger, require_torch_2, require_torch_gpu, run_test_in_subprocess
+from diffusers.utils import SAFE_WEIGHTS_INDEX_NAME, is_torch_npu_available, is_xformers_available, logging
+from diffusers.utils.hub_utils import _add_variant
+from diffusers.utils.testing_utils import (
+    CaptureLogger,
+    get_python_version,
+    is_torch_compile,
+    require_torch_2,
+    require_torch_accelerator_with_training,
+    require_torch_gpu,
+    require_torch_multi_gpu,
+    run_test_in_subprocess,
+    torch_device,
+)
+
+from ..others.test_utils import TOKEN, USER, is_staging_test
+
+
+def caculate_expected_num_shards(index_map_path):
+    with open(index_map_path) as f:
+        weight_map_dict = json.load(f)["weight_map"]
+    first_key = list(weight_map_dict.keys())[0]
+    weight_loc = weight_map_dict[first_key]  # e.g., diffusion_pytorch_model-00001-of-00002.safetensors
+    expected_num_shards = int(weight_loc.split("-")[-1].split(".")[0])
+    return expected_num_shards
 
 
 # Will be run via run_test_in_subprocess
@@ -43,7 +76,7 @@ def _test_from_save_pretrained_dynamo(in_queue, out_queue, timeout):
         model = torch.compile(model)
 
         with tempfile.TemporaryDirectory() as tmpdirname:
-            model.save_pretrained(tmpdirname)
+            model.save_pretrained(tmpdirname, safe_serialization=False)
             new_model = model_class.from_pretrained(tmpdirname)
             new_model.to(torch_device)
 
@@ -59,10 +92,6 @@ def _test_from_save_pretrained_dynamo(in_queue, out_queue, timeout):
 class ModelUtilsTest(unittest.TestCase):
     def tearDown(self):
         super().tearDown()
-
-        import diffusers
-
-        diffusers.utils.import_utils._safetensors_available = True
 
     def test_accelerate_loading_error_message(self):
         with self.assertRaises(ValueError) as error_context:
@@ -95,36 +124,38 @@ class ModelUtilsTest(unittest.TestCase):
             if p1.data.ne(p2.data).sum() > 0:
                 assert False, "Parameters not the same!"
 
+    @unittest.skip("Flaky behaviour on CI. Re-enable after migrating to new runners")
+    @unittest.skipIf(torch_device == "mps", reason="Test not supported for MPS.")
     def test_one_request_upon_cached(self):
-        # TODO: For some reason this test fails on MPS where no HEAD call is made.
-        if torch_device == "mps":
-            return
-
-        import diffusers
-
-        diffusers.utils.import_utils._safetensors_available = False
+        use_safetensors = False
 
         with tempfile.TemporaryDirectory() as tmpdirname:
             with requests_mock.mock(real_http=True) as m:
                 UNet2DConditionModel.from_pretrained(
-                    "hf-internal-testing/tiny-stable-diffusion-torch", subfolder="unet", cache_dir=tmpdirname
+                    "hf-internal-testing/tiny-stable-diffusion-torch",
+                    subfolder="unet",
+                    cache_dir=tmpdirname,
+                    use_safetensors=use_safetensors,
                 )
 
             download_requests = [r.method for r in m.request_history]
-            assert download_requests.count("HEAD") == 2, "2 HEAD requests one for config, one for model"
+            assert (
+                download_requests.count("HEAD") == 3
+            ), "3 HEAD requests one for config, one for model, and one for shard index file."
             assert download_requests.count("GET") == 2, "2 GET requests one for config, one for model"
 
             with requests_mock.mock(real_http=True) as m:
                 UNet2DConditionModel.from_pretrained(
-                    "hf-internal-testing/tiny-stable-diffusion-torch", subfolder="unet", cache_dir=tmpdirname
+                    "hf-internal-testing/tiny-stable-diffusion-torch",
+                    subfolder="unet",
+                    cache_dir=tmpdirname,
+                    use_safetensors=use_safetensors,
                 )
 
             cache_requests = [r.method for r in m.request_history]
             assert (
-                "HEAD" == cache_requests[0] and len(cache_requests) == 1
-            ), "We should call only `model_info` to check for _commit hash and `send_telemetry`"
-
-        diffusers.utils.import_utils._safetensors_available = True
+                "HEAD" == cache_requests[0] and len(cache_requests) == 2
+            ), "We should call only `model_info` to check for commit hash and  knowing if shard index is present."
 
     def test_weight_overwrite(self):
         with tempfile.TemporaryDirectory() as tmpdirname, self.assertRaises(ValueError) as error_context:
@@ -152,17 +183,6 @@ class ModelUtilsTest(unittest.TestCase):
 
 
 class UNetTesterMixin:
-    def test_forward_signature(self):
-        init_dict, _ = self.prepare_init_args_and_inputs_for_common()
-
-        model = self.model_class(**init_dict)
-        signature = inspect.signature(model.forward)
-        # signature.parameters is an OrderedDict => so arg_names order is deterministic
-        arg_names = [*signature.parameters.keys()]
-
-        expected_arg_names = ["sample", "timestep"]
-        self.assertListEqual(arg_names[:2], expected_arg_names)
-
     def test_forward_with_norm_groups(self):
         init_dict, inputs_dict = self.prepare_init_args_and_inputs_for_common()
 
@@ -187,35 +207,62 @@ class UNetTesterMixin:
 class ModelTesterMixin:
     main_input_name = None  # overwrite in model specific tester class
     base_precision = 1e-3
+    forward_requires_fresh_args = False
+    model_split_percents = [0.5, 0.7, 0.9]
+    uses_custom_attn_processor = False
 
-    def test_from_save_pretrained(self):
-        init_dict, inputs_dict = self.prepare_init_args_and_inputs_for_common()
+    def check_device_map_is_respected(self, model, device_map):
+        for param_name, param in model.named_parameters():
+            # Find device in device_map
+            while len(param_name) > 0 and param_name not in device_map:
+                param_name = ".".join(param_name.split(".")[:-1])
+            if param_name not in device_map:
+                raise ValueError("device map is incomplete, it does not contain any device for `param_name`.")
 
-        model = self.model_class(**init_dict)
+            param_device = device_map[param_name]
+            if param_device in ["cpu", "disk"]:
+                self.assertEqual(param.device, torch.device("meta"))
+            else:
+                self.assertEqual(param.device, torch.device(param_device))
+
+    def test_from_save_pretrained(self, expected_max_diff=5e-5):
+        if self.forward_requires_fresh_args:
+            model = self.model_class(**self.init_dict)
+        else:
+            init_dict, inputs_dict = self.prepare_init_args_and_inputs_for_common()
+            model = self.model_class(**init_dict)
+
         if hasattr(model, "set_default_attn_processor"):
             model.set_default_attn_processor()
         model.to(torch_device)
         model.eval()
 
         with tempfile.TemporaryDirectory() as tmpdirname:
-            model.save_pretrained(tmpdirname)
+            model.save_pretrained(tmpdirname, safe_serialization=False)
             new_model = self.model_class.from_pretrained(tmpdirname)
             if hasattr(new_model, "set_default_attn_processor"):
                 new_model.set_default_attn_processor()
             new_model.to(torch_device)
 
         with torch.no_grad():
-            image = model(**inputs_dict)
+            if self.forward_requires_fresh_args:
+                image = model(**self.inputs_dict(0))
+            else:
+                image = model(**inputs_dict)
+
             if isinstance(image, dict):
                 image = image.to_tuple()[0]
 
-            new_image = new_model(**inputs_dict)
+            if self.forward_requires_fresh_args:
+                new_image = new_model(**self.inputs_dict(0))
+            else:
+                new_image = new_model(**inputs_dict)
 
             if isinstance(new_image, dict):
                 new_image = new_image.to_tuple()[0]
 
-        max_diff = (image - new_image).abs().sum().item()
-        self.assertLessEqual(max_diff, 5e-5, "Models give different forward passes")
+        max_diff = (image - new_image).abs().max().item()
+        self.assertLessEqual(max_diff, expected_max_diff, "Models give different forward passes")
 
     def test_getattr_is_correct(self):
         init_dict, inputs_dict = self.prepare_init_args_and_inputs_for_common()
@@ -260,11 +307,116 @@ class ModelTesterMixin:
 
         assert str(error.exception) == f"'{type(model).__name__}' object has no attribute 'does_not_exist'"
 
+    @unittest.skipIf(
+        torch_device != "npu" or not is_torch_npu_available(),
+        reason="torch npu flash attention is only available with NPU and `torch_npu` installed",
+    )
+    def test_set_torch_npu_flash_attn_processor_determinism(self):
+        torch.use_deterministic_algorithms(False)
+        if self.forward_requires_fresh_args:
+            model = self.model_class(**self.init_dict)
+        else:
+            init_dict, inputs_dict = self.prepare_init_args_and_inputs_for_common()
+            model = self.model_class(**init_dict)
+        model.to(torch_device)
+
+        if not hasattr(model, "set_attn_processor"):
+            # If not has `set_attn_processor`, skip test
+            return
+
+        model.set_default_attn_processor()
+        assert all(type(proc) == AttnProcessorNPU for proc in model.attn_processors.values())
+        with torch.no_grad():
+            if self.forward_requires_fresh_args:
+                output = model(**self.inputs_dict(0))[0]
+            else:
+                output = model(**inputs_dict)[0]
+
+        model.enable_npu_flash_attention()
+        assert all(type(proc) == AttnProcessorNPU for proc in model.attn_processors.values())
+        with torch.no_grad():
+            if self.forward_requires_fresh_args:
+                output_2 = model(**self.inputs_dict(0))[0]
+            else:
+                output_2 = model(**inputs_dict)[0]
+
+        model.set_attn_processor(AttnProcessorNPU())
+        assert all(type(proc) == AttnProcessorNPU for proc in model.attn_processors.values())
+        with torch.no_grad():
+            if self.forward_requires_fresh_args:
+                output_3 = model(**self.inputs_dict(0))[0]
+            else:
+                output_3 = model(**inputs_dict)[0]
+
+        torch.use_deterministic_algorithms(True)
+
+        assert torch.allclose(output, output_2, atol=self.base_precision)
+        assert torch.allclose(output, output_3, atol=self.base_precision)
+        assert torch.allclose(output_2, output_3, atol=self.base_precision)
+
+    @unittest.skipIf(
+        torch_device != "cuda" or not is_xformers_available(),
+        reason="XFormers attention is only available with CUDA and `xformers` installed",
+    )
+    def test_set_xformers_attn_processor_for_determinism(self):
+        torch.use_deterministic_algorithms(False)
+        if self.forward_requires_fresh_args:
+            model = self.model_class(**self.init_dict)
+        else:
+            init_dict, inputs_dict = self.prepare_init_args_and_inputs_for_common()
+            model = self.model_class(**init_dict)
+        model.to(torch_device)
+
+        if not hasattr(model, "set_attn_processor"):
+            # If not has `set_attn_processor`, skip test
+            return
+
+        if not hasattr(model, "set_default_attn_processor"):
+            # If not has `set_attn_processor`, skip test
+            return
+
+        model.set_default_attn_processor()
+        assert all(type(proc) == AttnProcessor for proc in model.attn_processors.values())
+        with torch.no_grad():
+            if self.forward_requires_fresh_args:
+                output = model(**self.inputs_dict(0))[0]
+            else:
+                output = model(**inputs_dict)[0]
+
+        model.enable_xformers_memory_efficient_attention()
+        assert all(type(proc) == XFormersAttnProcessor for proc in model.attn_processors.values())
+        with torch.no_grad():
+            if self.forward_requires_fresh_args:
+                output_2 = model(**self.inputs_dict(0))[0]
+            else:
+                output_2 = model(**inputs_dict)[0]
+
+        model.set_attn_processor(XFormersAttnProcessor())
+        assert all(type(proc) == XFormersAttnProcessor for proc in model.attn_processors.values())
+        with torch.no_grad():
+            if self.forward_requires_fresh_args:
+                output_3 = model(**self.inputs_dict(0))[0]
+            else:
+                output_3 = model(**inputs_dict)[0]
+
+        torch.use_deterministic_algorithms(True)
+
+        assert torch.allclose(output, output_2, atol=self.base_precision)
+        assert torch.allclose(output, output_3, atol=self.base_precision)
+        assert torch.allclose(output_2, output_3, atol=self.base_precision)
+
     @require_torch_gpu
     def test_set_attn_processor_for_determinism(self):
+        if self.uses_custom_attn_processor:
+            return
+
         torch.use_deterministic_algorithms(False)
-        init_dict, inputs_dict = self.prepare_init_args_and_inputs_for_common()
-        model = self.model_class(**init_dict)
+        if self.forward_requires_fresh_args:
+            model = self.model_class(**self.init_dict)
+        else:
+            init_dict, inputs_dict = self.prepare_init_args_and_inputs_for_common()
+            model = self.model_class(**init_dict)
+
         model.to(torch_device)
 
         if not hasattr(model, "set_attn_processor"):
@@ -273,46 +425,49 @@ class ModelTesterMixin:
 
         assert all(type(proc) == AttnProcessor2_0 for proc in model.attn_processors.values())
         with torch.no_grad():
-            output_1 = model(**inputs_dict)[0]
+            if self.forward_requires_fresh_args:
+                output_1 = model(**self.inputs_dict(0))[0]
+            else:
+                output_1 = model(**inputs_dict)[0]
 
         model.set_default_attn_processor()
         assert all(type(proc) == AttnProcessor for proc in model.attn_processors.values())
         with torch.no_grad():
-            output_2 = model(**inputs_dict)[0]
-
-        model.enable_xformers_memory_efficient_attention()
-        assert all(type(proc) == XFormersAttnProcessor for proc in model.attn_processors.values())
-        with torch.no_grad():
-            output_3 = model(**inputs_dict)[0]
+            if self.forward_requires_fresh_args:
+                output_2 = model(**self.inputs_dict(0))[0]
+            else:
+                output_2 = model(**inputs_dict)[0]
 
         model.set_attn_processor(AttnProcessor2_0())
         assert all(type(proc) == AttnProcessor2_0 for proc in model.attn_processors.values())
         with torch.no_grad():
-            output_4 = model(**inputs_dict)[0]
+            if self.forward_requires_fresh_args:
+                output_4 = model(**self.inputs_dict(0))[0]
+            else:
+                output_4 = model(**inputs_dict)[0]
 
         model.set_attn_processor(AttnProcessor())
         assert all(type(proc) == AttnProcessor for proc in model.attn_processors.values())
         with torch.no_grad():
-            output_5 = model(**inputs_dict)[0]
-
-        model.set_attn_processor(XFormersAttnProcessor())
-        assert all(type(proc) == XFormersAttnProcessor for proc in model.attn_processors.values())
-        with torch.no_grad():
-            output_6 = model(**inputs_dict)[0]
+            if self.forward_requires_fresh_args:
+                output_5 = model(**self.inputs_dict(0))[0]
+            else:
+                output_5 = model(**inputs_dict)[0]
 
         torch.use_deterministic_algorithms(True)
 
         # make sure that outputs match
         assert torch.allclose(output_2, output_1, atol=self.base_precision)
-        assert torch.allclose(output_2, output_3, atol=self.base_precision)
         assert torch.allclose(output_2, output_4, atol=self.base_precision)
         assert torch.allclose(output_2, output_5, atol=self.base_precision)
-        assert torch.allclose(output_2, output_6, atol=self.base_precision)
 
-    def test_from_save_pretrained_variant(self):
-        init_dict, inputs_dict = self.prepare_init_args_and_inputs_for_common()
+    def test_from_save_pretrained_variant(self, expected_max_diff=5e-5):
+        if self.forward_requires_fresh_args:
+            model = self.model_class(**self.init_dict)
+        else:
+            init_dict, inputs_dict = self.prepare_init_args_and_inputs_for_common()
+            model = self.model_class(**init_dict)
 
-        model = self.model_class(**init_dict)
         if hasattr(model, "set_default_attn_processor"):
             model.set_default_attn_processor()
 
@@ -320,7 +475,7 @@ class ModelTesterMixin:
         model.eval()
 
         with tempfile.TemporaryDirectory() as tmpdirname:
-            model.save_pretrained(tmpdirname, variant="fp16")
+            model.save_pretrained(tmpdirname, variant="fp16", safe_serialization=False)
             new_model = self.model_class.from_pretrained(tmpdirname, variant="fp16")
             if hasattr(new_model, "set_default_attn_processor"):
                 new_model.set_default_attn_processor()
@@ -335,19 +490,30 @@ class ModelTesterMixin:
             new_model.to(torch_device)
 
         with torch.no_grad():
-            image = model(**inputs_dict)
+            if self.forward_requires_fresh_args:
+                image = model(**self.inputs_dict(0))
+            else:
+                image = model(**inputs_dict)
             if isinstance(image, dict):
                 image = image.to_tuple()[0]
 
-            new_image = new_model(**inputs_dict)
+            if self.forward_requires_fresh_args:
+                new_image = new_model(**self.inputs_dict(0))
+            else:
+                new_image = new_model(**inputs_dict)
 
             if isinstance(new_image, dict):
                 new_image = new_image.to_tuple()[0]
 
-        max_diff = (image - new_image).abs().sum().item()
-        self.assertLessEqual(max_diff, 5e-5, "Models give different forward passes")
+        max_diff = (image - new_image).abs().max().item()
+        self.assertLessEqual(max_diff, expected_max_diff, "Models give different forward passes")
 
+    @is_torch_compile
     @require_torch_2
+    @unittest.skipIf(
+        get_python_version == (3, 12),
+        reason="Torch Dynamo isn't yet supported for Python 3.12.",
+    )
     def test_from_save_pretrained_dynamo(self):
         init_dict, _ = self.prepare_init_args_and_inputs_for_common()
         inputs = [init_dict, self.model_class]
@@ -365,24 +531,33 @@ class ModelTesterMixin:
                 continue
             with tempfile.TemporaryDirectory() as tmpdirname:
                 model.to(dtype)
-                model.save_pretrained(tmpdirname)
+                model.save_pretrained(tmpdirname, safe_serialization=False)
                 new_model = self.model_class.from_pretrained(tmpdirname, low_cpu_mem_usage=True, torch_dtype=dtype)
                 assert new_model.dtype == dtype
                 new_model = self.model_class.from_pretrained(tmpdirname, low_cpu_mem_usage=False, torch_dtype=dtype)
                 assert new_model.dtype == dtype
 
     def test_determinism(self, expected_max_diff=1e-5):
-        init_dict, inputs_dict = self.prepare_init_args_and_inputs_for_common()
-        model = self.model_class(**init_dict)
+        if self.forward_requires_fresh_args:
+            model = self.model_class(**self.init_dict)
+        else:
+            init_dict, inputs_dict = self.prepare_init_args_and_inputs_for_common()
+            model = self.model_class(**init_dict)
         model.to(torch_device)
         model.eval()
 
         with torch.no_grad():
-            first = model(**inputs_dict)
+            if self.forward_requires_fresh_args:
+                first = model(**self.inputs_dict(0))
+            else:
+                first = model(**inputs_dict)
             if isinstance(first, dict):
                 first = first.to_tuple()[0]
 
-            second = model(**inputs_dict)
+            if self.forward_requires_fresh_args:
+                second = model(**self.inputs_dict(0))
+            else:
+                second = model(**inputs_dict)
             if isinstance(second, dict):
                 second = second.to_tuple()[0]
 
@@ -393,7 +568,7 @@ class ModelTesterMixin:
         max_diff = np.amax(np.abs(out_1 - out_2))
         self.assertLessEqual(max_diff, expected_max_diff)
 
-    def test_output(self):
+    def test_output(self, expected_output_shape=None):
         init_dict, inputs_dict = self.prepare_init_args_and_inputs_for_common()
         model = self.model_class(**init_dict)
         model.to(torch_device)
@@ -409,8 +584,12 @@ class ModelTesterMixin:
 
         # input & output have to have the same shape
         input_tensor = inputs_dict[self.main_input_name]
-        expected_shape = input_tensor.shape
-        self.assertEqual(output.shape, expected_shape, "Input and output shapes do not match")
+
+        if expected_output_shape is None:
+            expected_shape = input_tensor.shape
+            self.assertEqual(output.shape, expected_shape, "Input and output shapes do not match")
+        else:
+            self.assertEqual(output.shape, expected_output_shape, "Input and output shapes do not match")
 
     def test_model_from_pretrained(self):
         init_dict, inputs_dict = self.prepare_init_args_and_inputs_for_common()
@@ -422,7 +601,7 @@ class ModelTesterMixin:
         # test if the model can be loaded from the config
         # and has all the expected shape
         with tempfile.TemporaryDirectory() as tmpdirname:
-            model.save_pretrained(tmpdirname)
+            model.save_pretrained(tmpdirname, safe_serialization=False)
             new_model = self.model_class.from_pretrained(tmpdirname)
             new_model.to(torch_device)
             new_model.eval()
@@ -446,7 +625,7 @@ class ModelTesterMixin:
 
         self.assertEqual(output_1.shape, output_2.shape)
 
-    @unittest.skipIf(torch_device == "mps", "Training is not supported in mps")
+    @require_torch_accelerator_with_training
     def test_training(self):
         init_dict, inputs_dict = self.prepare_init_args_and_inputs_for_common()
 
@@ -463,7 +642,7 @@ class ModelTesterMixin:
         loss = torch.nn.functional.mse_loss(output, noise)
         loss.backward()
 
-    @unittest.skipIf(torch_device == "mps", "Training is not supported in mps")
+    @require_torch_accelerator_with_training
     def test_ema_training(self):
         init_dict, inputs_dict = self.prepare_init_args_and_inputs_for_common()
 
@@ -515,19 +694,26 @@ class ModelTesterMixin:
                     ),
                 )
 
-        init_dict, inputs_dict = self.prepare_init_args_and_inputs_for_common()
+        if self.forward_requires_fresh_args:
+            model = self.model_class(**self.init_dict)
+        else:
+            init_dict, inputs_dict = self.prepare_init_args_and_inputs_for_common()
+            model = self.model_class(**init_dict)
 
-        model = self.model_class(**init_dict)
         model.to(torch_device)
         model.eval()
 
         with torch.no_grad():
-            outputs_dict = model(**inputs_dict)
-            outputs_tuple = model(**inputs_dict, return_dict=False)
+            if self.forward_requires_fresh_args:
+                outputs_dict = model(**self.inputs_dict(0))
+                outputs_tuple = model(**self.inputs_dict(0), return_dict=False)
+            else:
+                outputs_dict = model(**inputs_dict)
+                outputs_tuple = model(**inputs_dict, return_dict=False)
 
         recursive_check(outputs_tuple, outputs_dict)
 
-    @unittest.skipIf(torch_device == "mps", "Gradient checkpointing skipped on MPS")
+    @require_torch_accelerator_with_training
     def test_enable_disable_gradient_checkpointing(self):
         if not self.model_class._supports_gradient_checkpointing:
             return  # Skip test if model does not support gradient checkpointing
@@ -565,3 +751,319 @@ class ModelTesterMixin:
                 f" {self.model_class}.__init__ if there are deprecated arguments or remove the deprecated argument"
                 " from `_deprecated_kwargs = [<deprecated_argument>]`"
             )
+
+    @require_torch_gpu
+    def test_cpu_offload(self):
+        config, inputs_dict = self.prepare_init_args_and_inputs_for_common()
+        model = self.model_class(**config).eval()
+        if model._no_split_modules is None:
+            return
+
+        model = model.to(torch_device)
+
+        torch.manual_seed(0)
+        base_output = model(**inputs_dict)
+
+        model_size = compute_module_sizes(model)[""]
+        # We test several splits of sizes to make sure it works.
+        max_gpu_sizes = [int(p * model_size) for p in self.model_split_percents[1:]]
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            model.cpu().save_pretrained(tmp_dir)
+
+            for max_size in max_gpu_sizes:
+                max_memory = {0: max_size, "cpu": model_size * 2}
+                new_model = self.model_class.from_pretrained(tmp_dir, device_map="auto", max_memory=max_memory)
+                # Making sure part of the model will actually end up offloaded
+                self.assertSetEqual(set(new_model.hf_device_map.values()), {0, "cpu"})
+
+                self.check_device_map_is_respected(new_model, new_model.hf_device_map)
+                torch.manual_seed(0)
+                new_output = new_model(**inputs_dict)
+
+                self.assertTrue(torch.allclose(base_output[0], new_output[0], atol=1e-5))
+
+    @require_torch_gpu
+    def test_disk_offload_without_safetensors(self):
+        config, inputs_dict = self.prepare_init_args_and_inputs_for_common()
+        model = self.model_class(**config).eval()
+        if model._no_split_modules is None:
+            return
+
+        model = model.to(torch_device)
+
+        torch.manual_seed(0)
+        base_output = model(**inputs_dict)
+
+        model_size = compute_module_sizes(model)[""]
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            model.cpu().save_pretrained(tmp_dir, safe_serialization=False)
+
+            with self.assertRaises(ValueError):
+                max_size = int(self.model_split_percents[0] * model_size)
+                max_memory = {0: max_size, "cpu": max_size}
+                # This errors out because it's missing an offload folder
+                new_model = self.model_class.from_pretrained(tmp_dir, device_map="auto", max_memory=max_memory)
+
+            max_size = int(self.model_split_percents[0] * model_size)
+            max_memory = {0: max_size, "cpu": max_size}
+            new_model = self.model_class.from_pretrained(
+                tmp_dir, device_map="auto", max_memory=max_memory, offload_folder=tmp_dir
+            )
+
+            self.check_device_map_is_respected(new_model, new_model.hf_device_map)
+            torch.manual_seed(0)
+            new_output = new_model(**inputs_dict)
+
+            self.assertTrue(torch.allclose(base_output[0], new_output[0], atol=1e-5))
+
+    @require_torch_gpu
+    def test_disk_offload_with_safetensors(self):
+        config, inputs_dict = self.prepare_init_args_and_inputs_for_common()
+        model = self.model_class(**config).eval()
+        if model._no_split_modules is None:
+            return
+
+        model = model.to(torch_device)
+
+        torch.manual_seed(0)
+        base_output = model(**inputs_dict)
+
+        model_size = compute_module_sizes(model)[""]
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            model.cpu().save_pretrained(tmp_dir)
+
+            max_size = int(self.model_split_percents[0] * model_size)
+            max_memory = {0: max_size, "cpu": max_size}
+            new_model = self.model_class.from_pretrained(
+                tmp_dir, device_map="auto", offload_folder=tmp_dir, max_memory=max_memory
+            )
+
+            self.check_device_map_is_respected(new_model, new_model.hf_device_map)
+            torch.manual_seed(0)
+            new_output = new_model(**inputs_dict)
+
+            self.assertTrue(torch.allclose(base_output[0], new_output[0], atol=1e-5))
+
+    @require_torch_multi_gpu
+    def test_model_parallelism(self):
+        config, inputs_dict = self.prepare_init_args_and_inputs_for_common()
+        model = self.model_class(**config).eval()
+        if model._no_split_modules is None:
+            return
+
+        model = model.to(torch_device)
+
+        torch.manual_seed(0)
+        base_output = model(**inputs_dict)
+
+        model_size = compute_module_sizes(model)[""]
+        # We test several splits of sizes to make sure it works.
+        max_gpu_sizes = [int(p * model_size) for p in self.model_split_percents[1:]]
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            model.cpu().save_pretrained(tmp_dir)
+
+            for max_size in max_gpu_sizes:
+                max_memory = {0: max_size, 1: model_size * 2, "cpu": model_size * 2}
+                new_model = self.model_class.from_pretrained(tmp_dir, device_map="auto", max_memory=max_memory)
+                # Making sure part of the model will actually end up offloaded
+                self.assertSetEqual(set(new_model.hf_device_map.values()), {0, 1})
+
+                self.check_device_map_is_respected(new_model, new_model.hf_device_map)
+
+                torch.manual_seed(0)
+                new_output = new_model(**inputs_dict)
+
+                self.assertTrue(torch.allclose(base_output[0], new_output[0], atol=1e-5))
+
+    @require_torch_gpu
+    def test_sharded_checkpoints(self):
+        torch.manual_seed(0)
+        config, inputs_dict = self.prepare_init_args_and_inputs_for_common()
+        model = self.model_class(**config).eval()
+        model = model.to(torch_device)
+
+        base_output = model(**inputs_dict)
+
+        model_size = compute_module_sizes(model)[""]
+        max_shard_size = int((model_size * 0.75) / (2**10))  # Convert to KB as these test models are small.
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            model.cpu().save_pretrained(tmp_dir, max_shard_size=f"{max_shard_size}KB")
+            self.assertTrue(os.path.exists(os.path.join(tmp_dir, SAFE_WEIGHTS_INDEX_NAME)))
+
+            # Now check if the right number of shards exists. First, let's get the number of shards.
+            # Since this number can be dependent on the model being tested, it's important that we calculate it
+            # instead of hardcoding it.
+            expected_num_shards = caculate_expected_num_shards(os.path.join(tmp_dir, SAFE_WEIGHTS_INDEX_NAME))
+            actual_num_shards = len([file for file in os.listdir(tmp_dir) if file.endswith(".safetensors")])
+            self.assertTrue(actual_num_shards == expected_num_shards)
+
+            new_model = self.model_class.from_pretrained(tmp_dir).eval()
+            new_model = new_model.to(torch_device)
+
+            torch.manual_seed(0)
+            if "generator" in inputs_dict:
+                _, inputs_dict = self.prepare_init_args_and_inputs_for_common()
+            new_output = new_model(**inputs_dict)
+
+            self.assertTrue(torch.allclose(base_output[0], new_output[0], atol=1e-5))
+
+    @require_torch_gpu
+    def test_sharded_checkpoints_with_variant(self):
+        torch.manual_seed(0)
+        config, inputs_dict = self.prepare_init_args_and_inputs_for_common()
+        model = self.model_class(**config).eval()
+        model = model.to(torch_device)
+
+        base_output = model(**inputs_dict)
+
+        model_size = compute_module_sizes(model)[""]
+        max_shard_size = int((model_size * 0.75) / (2**10))  # Convert to KB as these test models are small.
+        variant = "fp16"
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            # It doesn't matter if the actual model is in fp16 or not. Just adding the variant and
+            # testing if loading works with the variant when the checkpoint is sharded should be
+            # enough.
+            model.cpu().save_pretrained(tmp_dir, max_shard_size=f"{max_shard_size}KB", variant=variant)
+            index_filename = _add_variant(SAFE_WEIGHTS_INDEX_NAME, variant)
+            self.assertTrue(os.path.exists(os.path.join(tmp_dir, index_filename)))
+
+            # Now check if the right number of shards exists. First, let's get the number of shards.
+            # Since this number can be dependent on the model being tested, it's important that we calculate it
+            # instead of hardcoding it.
+            expected_num_shards = caculate_expected_num_shards(os.path.join(tmp_dir, index_filename))
+            actual_num_shards = len([file for file in os.listdir(tmp_dir) if file.endswith(".safetensors")])
+            self.assertTrue(actual_num_shards == expected_num_shards)
+
+            new_model = self.model_class.from_pretrained(tmp_dir, variant=variant).eval()
+            new_model = new_model.to(torch_device)
+
+            torch.manual_seed(0)
+            if "generator" in inputs_dict:
+                _, inputs_dict = self.prepare_init_args_and_inputs_for_common()
+            new_output = new_model(**inputs_dict)
+
+            self.assertTrue(torch.allclose(base_output[0], new_output[0], atol=1e-5))
+
+    @require_torch_gpu
+    def test_sharded_checkpoints_device_map(self):
+        config, inputs_dict = self.prepare_init_args_and_inputs_for_common()
+        model = self.model_class(**config).eval()
+        if model._no_split_modules is None:
+            return
+        model = model.to(torch_device)
+
+        torch.manual_seed(0)
+        base_output = model(**inputs_dict)
+
+        model_size = compute_module_sizes(model)[""]
+        max_shard_size = int((model_size * 0.75) / (2**10))  # Convert to KB as these test models are small.
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            model.cpu().save_pretrained(tmp_dir, max_shard_size=f"{max_shard_size}KB")
+            self.assertTrue(os.path.exists(os.path.join(tmp_dir, SAFE_WEIGHTS_INDEX_NAME)))
+
+            # Now check if the right number of shards exists. First, let's get the number of shards.
+            # Since this number can be dependent on the model being tested, it's important that we calculate it
+            # instead of hardcoding it.
+            expected_num_shards = caculate_expected_num_shards(os.path.join(tmp_dir, SAFE_WEIGHTS_INDEX_NAME))
+            actual_num_shards = len([file for file in os.listdir(tmp_dir) if file.endswith(".safetensors")])
+            self.assertTrue(actual_num_shards == expected_num_shards)
+
+            new_model = self.model_class.from_pretrained(tmp_dir, device_map="auto")
+
+            torch.manual_seed(0)
+            if "generator" in inputs_dict:
+                _, inputs_dict = self.prepare_init_args_and_inputs_for_common()
+            new_output = new_model(**inputs_dict)
+            self.assertTrue(torch.allclose(base_output[0], new_output[0], atol=1e-5))
+
+
+@is_staging_test
+class ModelPushToHubTester(unittest.TestCase):
+    identifier = uuid.uuid4()
+    repo_id = f"test-model-{identifier}"
+    org_repo_id = f"valid_org/{repo_id}-org"
+
+    def test_push_to_hub(self):
+        model = UNet2DConditionModel(
+            block_out_channels=(32, 64),
+            layers_per_block=2,
+            sample_size=32,
+            in_channels=4,
+            out_channels=4,
+            down_block_types=("DownBlock2D", "CrossAttnDownBlock2D"),
+            up_block_types=("CrossAttnUpBlock2D", "UpBlock2D"),
+            cross_attention_dim=32,
+        )
+        model.push_to_hub(self.repo_id, token=TOKEN)
+
+        new_model = UNet2DConditionModel.from_pretrained(f"{USER}/{self.repo_id}")
+        for p1, p2 in zip(model.parameters(), new_model.parameters()):
+            self.assertTrue(torch.equal(p1, p2))
+
+        # Reset repo
+        delete_repo(token=TOKEN, repo_id=self.repo_id)
+
+        # Push to hub via save_pretrained
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            model.save_pretrained(tmp_dir, repo_id=self.repo_id, push_to_hub=True, token=TOKEN)
+
+        new_model = UNet2DConditionModel.from_pretrained(f"{USER}/{self.repo_id}")
+        for p1, p2 in zip(model.parameters(), new_model.parameters()):
+            self.assertTrue(torch.equal(p1, p2))
+
+        # Reset repo
+        delete_repo(self.repo_id, token=TOKEN)
+
+    def test_push_to_hub_in_organization(self):
+        model = UNet2DConditionModel(
+            block_out_channels=(32, 64),
+            layers_per_block=2,
+            sample_size=32,
+            in_channels=4,
+            out_channels=4,
+            down_block_types=("DownBlock2D", "CrossAttnDownBlock2D"),
+            up_block_types=("CrossAttnUpBlock2D", "UpBlock2D"),
+            cross_attention_dim=32,
+        )
+        model.push_to_hub(self.org_repo_id, token=TOKEN)
+
+        new_model = UNet2DConditionModel.from_pretrained(self.org_repo_id)
+        for p1, p2 in zip(model.parameters(), new_model.parameters()):
+            self.assertTrue(torch.equal(p1, p2))
+
+        # Reset repo
+        delete_repo(token=TOKEN, repo_id=self.org_repo_id)
+
+        # Push to hub via save_pretrained
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            model.save_pretrained(tmp_dir, push_to_hub=True, token=TOKEN, repo_id=self.org_repo_id)
+
+        new_model = UNet2DConditionModel.from_pretrained(self.org_repo_id)
+        for p1, p2 in zip(model.parameters(), new_model.parameters()):
+            self.assertTrue(torch.equal(p1, p2))
+
+        # Reset repo
+        delete_repo(self.org_repo_id, token=TOKEN)
+
+    @unittest.skipIf(
+        not is_jinja_available(),
+        reason="Model card tests cannot be performed without Jinja installed.",
+    )
+    def test_push_to_hub_library_name(self):
+        model = UNet2DConditionModel(
+            block_out_channels=(32, 64),
+            layers_per_block=2,
+            sample_size=32,
+            in_channels=4,
+            out_channels=4,
+            down_block_types=("DownBlock2D", "CrossAttnDownBlock2D"),
+            up_block_types=("CrossAttnUpBlock2D", "UpBlock2D"),
+            cross_attention_dim=32,
+        )
+        model.push_to_hub(self.repo_id, token=TOKEN)
+
+        model_card = ModelCard.load(f"{USER}/{self.repo_id}", token=TOKEN).data
+        assert model_card.library_name == "diffusers"
+
+        # Reset repo
+        delete_repo(self.repo_id, token=TOKEN)

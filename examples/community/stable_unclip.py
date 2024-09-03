@@ -8,7 +8,8 @@ from transformers.models.clip.modeling_clip import CLIPTextModelOutput
 from diffusers.models import PriorTransformer
 from diffusers.pipelines import DiffusionPipeline, StableDiffusionImageVariationPipeline
 from diffusers.schedulers import UnCLIPScheduler
-from diffusers.utils import logging, randn_tensor
+from diffusers.utils import logging
+from diffusers.utils.torch_utils import randn_tensor
 
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
@@ -190,7 +191,7 @@ class StableUnCLIPPipeline(DiffusionPipeline):
         num_images_per_prompt: int = 1,
         prior_num_inference_steps: int = 25,
         generator: Optional[torch.Generator] = None,
-        prior_latents: Optional[torch.FloatTensor] = None,
+        prior_latents: Optional[torch.Tensor] = None,
         text_model_output: Optional[Union[CLIPTextModelOutput, Tuple]] = None,
         text_attention_mask: Optional[torch.Tensor] = None,
         prior_guidance_scale: float = 4.0,

@@ -31,7 +31,7 @@ class MultiControlNetModel(ModelMixin):
 
     def forward(
         self,
-        sample: torch.FloatTensor,
+        sample: torch.Tensor,
         timestep: Union[torch.Tensor, float, int],
         encoder_hidden_states: torch.Tensor,
         controlnet_cond: List[torch.tensor],
@@ -39,6 +39,7 @@ class MultiControlNetModel(ModelMixin):
         class_labels: Optional[torch.Tensor] = None,
         timestep_cond: Optional[torch.Tensor] = None,
         attention_mask: Optional[torch.Tensor] = None,
+        added_cond_kwargs: Optional[Dict[str, torch.Tensor]] = None,
         cross_attention_kwargs: Optional[Dict[str, Any]] = None,
         guess_mode: bool = False,
         return_dict: bool = True,
@@ -53,6 +54,7 @@ class MultiControlNetModel(ModelMixin):
                 class_labels=class_labels,
                 timestep_cond=timestep_cond,
                 attention_mask=attention_mask,
+                added_cond_kwargs=added_cond_kwargs,
                 cross_attention_kwargs=cross_attention_kwargs,
                 guess_mode=guess_mode,
                 return_dict=return_dict,
@@ -75,7 +77,7 @@ class MultiControlNetModel(ModelMixin):
         save_directory: Union[str, os.PathLike],
         is_main_process: bool = True,
         save_function: Callable = None,
-        safe_serialization: bool = False,
+        safe_serialization: bool = True,
         variant: Optional[str] = None,
     ):
         """
@@ -93,24 +95,20 @@ class MultiControlNetModel(ModelMixin):
                 The function to use to save the state dictionary. Useful on distributed training like TPUs when one
                 need to replace `torch.save` by another method. Can be configured with the environment variable
                 `DIFFUSERS_SAVE_MODE`.
-            safe_serialization (`bool`, *optional*, defaults to `False`):
+            safe_serialization (`bool`, *optional*, defaults to `True`):
                 Whether to save the model using `safetensors` or the traditional PyTorch way (that uses `pickle`).
             variant (`str`, *optional*):
                 If specified, weights are saved in the format pytorch_model.<variant>.bin.
         """
-        idx = 0
-        model_path_to_save = save_directory
-        for controlnet in self.nets:
+        for idx, controlnet in enumerate(self.nets):
+            suffix = "" if idx == 0 else f"_{idx}"
             controlnet.save_pretrained(
-                model_path_to_save,
+                save_directory + suffix,
                 is_main_process=is_main_process,
                 save_function=save_function,
                 safe_serialization=safe_serialization,
                 variant=variant,
             )
-
-            idx += 1
-            model_path_to_save = model_path_to_save + f"_{idx}"
 
     @classmethod
     def from_pretrained(cls, pretrained_model_path: Optional[Union[str, os.PathLike]], **kwargs):

@@ -1,5 +1,5 @@
 # coding=utf-8
-# Copyright 2023 The HuggingFace Inc. team.
+# Copyright 2024 The HuggingFace Inc. team.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,9 +12,10 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-""" Conversion script for the LDM checkpoints. """
+"""Conversion script for the LDM checkpoints."""
 
 import argparse
+import importlib
 
 import torch
 
@@ -33,6 +34,12 @@ if __name__ == "__main__":
         default=None,
         type=str,
         help="The YAML config file corresponding to the original architecture.",
+    )
+    parser.add_argument(
+        "--config_files",
+        default=None,
+        type=str,
+        help="The YAML config file corresponding to the architecture.",
     )
     parser.add_argument(
         "--num_in_channels",
@@ -60,7 +67,7 @@ if __name__ == "__main__":
         default=None,
         type=int,
         help=(
-            "The image size that the model was trained on. Use 512 for Stable Diffusion v1.X and Stable Siffusion v2"
+            "The image size that the model was trained on. Use 512 for Stable Diffusion v1.X and Stable Diffusion v2"
             " Base. Use 768 for Stable Diffusion v2."
         ),
     )
@@ -133,11 +140,27 @@ if __name__ == "__main__":
         required=False,
         help="Set to a path, hub id to an already converted vae to not convert it again.",
     )
+    parser.add_argument(
+        "--pipeline_class_name",
+        type=str,
+        default=None,
+        required=False,
+        help="Specify the pipeline class name",
+    )
+
     args = parser.parse_args()
 
+    if args.pipeline_class_name is not None:
+        library = importlib.import_module("diffusers")
+        class_obj = getattr(library, args.pipeline_class_name)
+        pipeline_class = class_obj
+    else:
+        pipeline_class = None
+
     pipe = download_from_original_stable_diffusion_ckpt(
-        checkpoint_path=args.checkpoint_path,
+        checkpoint_path_or_dict=args.checkpoint_path,
         original_config_file=args.original_config_file,
+        config_files=args.config_files,
         image_size=args.image_size,
         prediction_type=args.prediction_type,
         model_type=args.pipeline_type,
@@ -152,10 +175,11 @@ if __name__ == "__main__":
         clip_stats_path=args.clip_stats_path,
         controlnet=args.controlnet,
         vae_path=args.vae_path,
+        pipeline_class=pipeline_class,
     )
 
     if args.half:
-        pipe.to(torch_dtype=torch.float16)
+        pipe.to(dtype=torch.float16)
 
     if args.controlnet:
         # only save the controlnet model

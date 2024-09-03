@@ -1,4 +1,4 @@
-# Copyright 2023 Google Brain and The HuggingFace Team. All rights reserved.
+# Copyright 2024 Google Brain and The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from typing import Optional, Tuple, Union
 
 import flax
+import jax
 import jax.numpy as jnp
 from jax import random
 
@@ -169,7 +170,7 @@ class FlaxScoreSdeVeScheduler(FlaxSchedulerMixin, ConfigMixin):
         model_output: jnp.ndarray,
         timestep: int,
         sample: jnp.ndarray,
-        key: random.KeyArray,
+        key: jax.Array,
         return_dict: bool = True,
     ) -> Union[FlaxSdeVeOutput, Tuple]:
         """
@@ -228,7 +229,7 @@ class FlaxScoreSdeVeScheduler(FlaxSchedulerMixin, ConfigMixin):
         state: ScoreSdeVeSchedulerState,
         model_output: jnp.ndarray,
         sample: jnp.ndarray,
-        key: random.KeyArray,
+        key: jax.Array,
         return_dict: bool = True,
     ) -> Union[FlaxSdeVeOutput, Tuple]:
         """

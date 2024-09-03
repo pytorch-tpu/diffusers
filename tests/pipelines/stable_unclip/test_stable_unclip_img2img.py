@@ -22,9 +22,9 @@ from diffusers.utils.testing_utils import (
     floats_tensor,
     load_image,
     load_numpy,
+    nightly,
     require_torch_gpu,
     skip_mps,
-    slow,
     torch_device,
 )
 
@@ -182,7 +182,7 @@ class StableUnCLIPImg2ImgPipelineFastTests(
         image_slice = image[0, -3:, -3:, -1]
 
         assert image.shape == (1, 32, 32, 3)
-        expected_slice = np.array([0.3872, 0.7224, 0.5601, 0.4741, 0.6872, 0.5814, 0.4636, 0.3867, 0.5078])
+        expected_slice = np.array([0.4397, 0.7080, 0.5590, 0.4255, 0.7181, 0.5938, 0.4051, 0.3720, 0.5116])
 
         assert np.abs(image_slice.flatten() - expected_slice).max() < 1e-3
 
@@ -196,9 +196,7 @@ class StableUnCLIPImg2ImgPipelineFastTests(
     # Overriding PipelineTesterMixin::test_inference_batch_single_identical
     # because undeterminism requires a looser check.
     def test_inference_batch_single_identical(self):
-        test_max_difference = torch_device in ["cpu", "mps"]
-
-        self._test_inference_batch_single_identical(test_max_difference=test_max_difference)
+        self._test_inference_batch_single_identical(expected_max_diff=1e-3)
 
     @unittest.skipIf(
         torch_device != "cuda" or not is_xformers_available(),
@@ -208,9 +206,15 @@ class StableUnCLIPImg2ImgPipelineFastTests(
         self._test_xformers_attention_forwardGenerator_pass(test_max_difference=False)
 
 
-@slow
+@nightly
 @require_torch_gpu
 class StableUnCLIPImg2ImgPipelineIntegrationTests(unittest.TestCase):
+    def setUp(self):
+        # clean up the VRAM before each test
+        super().setUp()
+        gc.collect()
+        torch.cuda.empty_cache()
+
     def tearDown(self):
         # clean up the VRAM after each test
         super().tearDown()
@@ -229,7 +233,6 @@ class StableUnCLIPImg2ImgPipelineIntegrationTests(unittest.TestCase):
         pipe = StableUnCLIPImg2ImgPipeline.from_pretrained(
             "fusing/stable-unclip-2-1-l-img2img", torch_dtype=torch.float16
         )
-        pipe.to(torch_device)
         pipe.set_progress_bar_config(disable=None)
         # stable unclip will oom when integration tests are run on a V100,
         # so turn on memory savings
@@ -257,7 +260,6 @@ class StableUnCLIPImg2ImgPipelineIntegrationTests(unittest.TestCase):
         pipe = StableUnCLIPImg2ImgPipeline.from_pretrained(
             "fusing/stable-unclip-2-1-h-img2img", torch_dtype=torch.float16
         )
-        pipe.to(torch_device)
         pipe.set_progress_bar_config(disable=None)
         # stable unclip will oom when integration tests are run on a V100,
         # so turn on memory savings
@@ -285,7 +287,6 @@ class StableUnCLIPImg2ImgPipelineIntegrationTests(unittest.TestCase):
         pipe = StableUnCLIPImg2ImgPipeline.from_pretrained(
             "fusing/stable-unclip-2-1-h-img2img", torch_dtype=torch.float16
         )
-        pipe = pipe.to(torch_device)
         pipe.set_progress_bar_config(disable=None)
         pipe.enable_attention_slicing()
         pipe.enable_sequential_cpu_offload()

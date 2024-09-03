@@ -1,5 +1,5 @@
 # coding=utf-8
-# Copyright 2023 HuggingFace Inc.
+# Copyright 2024 HuggingFace Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -19,7 +19,7 @@ import numpy as np
 import torch
 
 from diffusers import PNDMPipeline, PNDMScheduler, UNet2DModel
-from diffusers.utils.testing_utils import enable_full_determinism, require_torch, slow, torch_device
+from diffusers.utils.testing_utils import enable_full_determinism, nightly, require_torch, torch_device
 
 
 enable_full_determinism()
@@ -49,10 +49,10 @@ class PNDMPipelineFastTests(unittest.TestCase):
         pndm.set_progress_bar_config(disable=None)
 
         generator = torch.manual_seed(0)
-        image = pndm(generator=generator, num_inference_steps=20, output_type="numpy").images
+        image = pndm(generator=generator, num_inference_steps=20, output_type="np").images
 
         generator = torch.manual_seed(0)
-        image_from_tuple = pndm(generator=generator, num_inference_steps=20, output_type="numpy", return_dict=False)[0]
+        image_from_tuple = pndm(generator=generator, num_inference_steps=20, output_type="np", return_dict=False)[0]
 
         image_slice = image[0, -3:, -3:, -1]
         image_from_tuple_slice = image_from_tuple[0, -3:, -3:, -1]
@@ -64,7 +64,7 @@ class PNDMPipelineFastTests(unittest.TestCase):
         assert np.abs(image_from_tuple_slice.flatten() - expected_slice).max() < 1e-2
 
 
-@slow
+@nightly
 @require_torch
 class PNDMPipelineIntegrationTests(unittest.TestCase):
     def test_inference_cifar10(self):
@@ -77,7 +77,7 @@ class PNDMPipelineIntegrationTests(unittest.TestCase):
         pndm.to(torch_device)
         pndm.set_progress_bar_config(disable=None)
         generator = torch.manual_seed(0)
-        image = pndm(generator=generator, output_type="numpy").images
+        image = pndm(generator=generator, output_type="np").images
 
         image_slice = image[0, -3:, -3:, -1]
 

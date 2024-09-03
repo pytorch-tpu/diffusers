@@ -1,4 +1,4 @@
-# Copyright 2023 The HuggingFace Team. All rights reserved.
+# Copyright 2024 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -23,9 +23,9 @@ logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 
 
 class PaintByExampleImageEncoder(CLIPPreTrainedModel):
-    def __init__(self, config, proj_size=768):
+    def __init__(self, config, proj_size=None):
         super().__init__(config)
-        self.proj_size = proj_size
+        self.proj_size = proj_size or getattr(config, "projection_dim", 768)
 
         self.model = CLIPVisionModel(config)
         self.mapper = PaintByExampleMapper(config)

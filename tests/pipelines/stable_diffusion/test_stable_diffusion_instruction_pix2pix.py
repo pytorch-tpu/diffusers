@@ -1,5 +1,5 @@
 # coding=utf-8
-# Copyright 2023 HuggingFace Inc.
+# Copyright 2024 HuggingFace Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -32,15 +32,26 @@ from diffusers import (
     UNet2DConditionModel,
 )
 from diffusers.image_processor import VaeImageProcessor
-from diffusers.utils import floats_tensor, load_image, slow, torch_device
-from diffusers.utils.testing_utils import enable_full_determinism, require_torch_gpu
+from diffusers.utils.testing_utils import (
+    enable_full_determinism,
+    floats_tensor,
+    load_image,
+    require_torch_gpu,
+    slow,
+    torch_device,
+)
 
 from ..pipeline_params import (
     IMAGE_TO_IMAGE_IMAGE_PARAMS,
     TEXT_GUIDED_IMAGE_INPAINTING_BATCH_PARAMS,
     TEXT_GUIDED_IMAGE_VARIATION_PARAMS,
+    TEXT_TO_IMAGE_CALLBACK_CFG_PARAMS,
 )
-from ..test_pipelines_common import PipelineKarrasSchedulerTesterMixin, PipelineLatentTesterMixin, PipelineTesterMixin
+from ..test_pipelines_common import (
+    PipelineKarrasSchedulerTesterMixin,
+    PipelineLatentTesterMixin,
+    PipelineTesterMixin,
+)
 
 
 enable_full_determinism()
@@ -54,6 +65,7 @@ class StableDiffusionInstructPix2PixPipelineFastTests(
     batch_params = TEXT_GUIDED_IMAGE_INPAINTING_BATCH_PARAMS
     image_params = IMAGE_TO_IMAGE_IMAGE_PARAMS
     image_latents_params = IMAGE_TO_IMAGE_IMAGE_PARAMS
+    callback_cfg_params = TEXT_TO_IMAGE_CALLBACK_CFG_PARAMS.union({"image_latents"}) - {"negative_prompt_embeds"}
 
     def get_dummy_components(self):
         torch.manual_seed(0)
@@ -100,6 +112,7 @@ class StableDiffusionInstructPix2PixPipelineFastTests(
             "tokenizer": tokenizer,
             "safety_checker": None,
             "feature_extractor": None,
+            "image_encoder": None,
         }
         return components
 
@@ -118,7 +131,7 @@ class StableDiffusionInstructPix2PixPipelineFastTests(
             "num_inference_steps": 2,
             "guidance_scale": 6.0,
             "image_guidance_scale": 1,
-            "output_type": "numpy",
+            "output_type": "np",
         }
         return inputs
 
@@ -226,10 +239,43 @@ class StableDiffusionInstructPix2PixPipelineFastTests(
         max_diff = np.abs(out - out_latents_inputs).max()
         self.assertLess(max_diff, 1e-4, "passing latents as image input generate different result from passing image")
 
+    # Override the default test_callback_cfg because pix2pix create inputs for cfg differently
+    def test_callback_cfg(self):
+        components = self.get_dummy_components()
+        pipe = self.pipeline_class(**components)
+        pipe = pipe.to(torch_device)
+        pipe.set_progress_bar_config(disable=None)
+
+        def callback_no_cfg(pipe, i, t, callback_kwargs):
+            if i == 1:
+                for k, w in callback_kwargs.items():
+                    if k in self.callback_cfg_params:
+                        callback_kwargs[k] = callback_kwargs[k].chunk(3)[0]
+                pipe._guidance_scale = 1.0
+
+            return callback_kwargs
+
+        inputs = self.get_dummy_inputs(torch_device)
+        inputs["guidance_scale"] = 1.0
+        inputs["num_inference_steps"] = 2
+        out_no_cfg = pipe(**inputs)[0]
+
+        inputs["guidance_scale"] = 7.5
+        inputs["callback_on_step_end"] = callback_no_cfg
+        inputs["callback_on_step_end_tensor_inputs"] = pipe._callback_tensor_inputs
+        out_callback_no_cfg = pipe(**inputs)[0]
+
+        assert out_no_cfg.shape == out_callback_no_cfg.shape
+
 
 @slow
 @require_torch_gpu
 class StableDiffusionInstructPix2PixPipelineSlowTests(unittest.TestCase):
+    def setUp(self):
+        super().setUp()
+        gc.collect()
+        torch.cuda.empty_cache()
+
     def tearDown(self):
         super().tearDown()
         gc.collect()
@@ -247,7 +293,7 @@ class StableDiffusionInstructPix2PixPipelineSlowTests(unittest.TestCase):
             "num_inference_steps": 3,
             "guidance_scale": 7.5,
             "image_guidance_scale": 1.0,
-            "output_type": "numpy",
+            "output_type": "np",
         }
         return inputs
 
@@ -307,7 +353,7 @@ class StableDiffusionInstructPix2PixPipelineSlowTests(unittest.TestCase):
     def test_stable_diffusion_pix2pix_intermediate_state(self):
         number_of_steps = 0
 
-        def callback_fn(step: int, timestep: int, latents: torch.FloatTensor) -> None:
+        def callback_fn(step: int, timestep: int, latents: torch.Tensor) -> None:
             callback_fn.has_been_called = True
             nonlocal number_of_steps
             number_of_steps += 1
@@ -348,7 +394,6 @@ class StableDiffusionInstructPix2PixPipelineSlowTests(unittest.TestCase):
         pipe = StableDiffusionInstructPix2PixPipeline.from_pretrained(
             "timbrooks/instruct-pix2pix", safety_checker=None, torch_dtype=torch.float16
         )
-        pipe = pipe.to(torch_device)
         pipe.set_progress_bar_config(disable=None)
         pipe.enable_attention_slicing(1)
         pipe.enable_sequential_cpu_offload()

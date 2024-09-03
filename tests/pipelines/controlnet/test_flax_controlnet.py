@@ -1,5 +1,5 @@
 # coding=utf-8
-# Copyright 2023 HuggingFace Inc.
+# Copyright 2024 HuggingFace Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -17,8 +17,8 @@ import gc
 import unittest
 
 from diffusers import FlaxControlNetModel, FlaxStableDiffusionControlNetPipeline
-from diffusers.utils import is_flax_available, load_image, slow
-from diffusers.utils.testing_utils import require_flax
+from diffusers.utils import is_flax_available, load_image
+from diffusers.utils.testing_utils import require_flax, slow
 
 
 if is_flax_available():

@@ -1,5 +1,5 @@
 # coding=utf-8
-# Copyright 2023 HuggingFace Inc.
+# Copyright 2024 HuggingFace Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -20,8 +20,15 @@ import numpy as np
 import torch
 
 from diffusers import DDIMScheduler, LDMSuperResolutionPipeline, UNet2DModel, VQModel
-from diffusers.utils import PIL_INTERPOLATION, floats_tensor, load_image, slow, torch_device
-from diffusers.utils.testing_utils import enable_full_determinism, require_torch
+from diffusers.utils import PIL_INTERPOLATION
+from diffusers.utils.testing_utils import (
+    enable_full_determinism,
+    floats_tensor,
+    load_image,
+    nightly,
+    require_torch,
+    torch_device,
+)
 
 
 enable_full_determinism()
@@ -77,7 +84,7 @@ class LDMSuperResolutionPipelineFastTests(unittest.TestCase):
         init_image = self.dummy_image.to(device)
 
         generator = torch.Generator(device=device).manual_seed(0)
-        image = ldm(image=init_image, generator=generator, num_inference_steps=2, output_type="numpy").images
+        image = ldm(image=init_image, generator=generator, num_inference_steps=2, output_type="np").images
 
         image_slice = image[0, -3:, -3:, -1]
 
@@ -102,12 +109,12 @@ class LDMSuperResolutionPipelineFastTests(unittest.TestCase):
 
         init_image = self.dummy_image.to(torch_device)
 
-        image = ldm(init_image, num_inference_steps=2, output_type="numpy").images
+        image = ldm(init_image, num_inference_steps=2, output_type="np").images
 
         assert image.shape == (1, 64, 64, 3)
 
 
-@slow
+@nightly
 @require_torch
 class LDMSuperResolutionPipelineIntegrationTests(unittest.TestCase):
     def test_inference_superresolution(self):
@@ -117,11 +124,11 @@ class LDMSuperResolutionPipelineIntegrationTests(unittest.TestCase):
         )
         init_image = init_image.resize((64, 64), resample=PIL_INTERPOLATION["lanczos"])
 
-        ldm = LDMSuperResolutionPipeline.from_pretrained("duongna/ldm-super-resolution", device_map="auto")
+        ldm = LDMSuperResolutionPipeline.from_pretrained("duongna/ldm-super-resolution")
         ldm.set_progress_bar_config(disable=None)
 
         generator = torch.manual_seed(0)
-        image = ldm(image=init_image, generator=generator, num_inference_steps=20, output_type="numpy").images
+        image = ldm(image=init_image, generator=generator, num_inference_steps=20, output_type="np").images
 
         image_slice = image[0, -3:, -3:, -1]
 

@@ -1,3 +1,17 @@
+# Copyright 2024 The HuggingFace Team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 from typing import Callable, List, Optional, Union
 
 import torch
@@ -5,12 +19,10 @@ import torch
 from ...models import UNet2DModel
 from ...schedulers import CMStochasticIterativeScheduler
 from ...utils import (
-    is_accelerate_available,
-    is_accelerate_version,
     logging,
-    randn_tensor,
     replace_example_docstring,
 )
+from ...utils.torch_utils import randn_tensor
 from ..pipeline_utils import DiffusionPipeline, ImagePipelineOutput
 
 
@@ -40,7 +52,7 @@ EXAMPLE_DOC_STRING = """
         >>> image.save("cd_imagenet64_l2_onestep_sample_penguin.png")
 
         >>> # Multistep sampling, class-conditional image generation
-        >>> # Timesteps can be explicitly specified; the particular timesteps below are from the original Github repo:
+        >>> # Timesteps can be explicitly specified; the particular timesteps below are from the original GitHub repo:
         >>> # https://github.com/openai/consistency_models/blob/main/scripts/launch.sh#L77
         >>> image = pipe(num_inference_steps=None, timesteps=[22, 0], class_labels=145).images[0]
         >>> image.save("cd_imagenet64_l2_multistep_sample_penguin.png")
@@ -63,6 +75,8 @@ class ConsistencyModelPipeline(DiffusionPipeline):
             compatible with [`CMStochasticIterativeScheduler`].
     """
 
+    model_cpu_offload_seq = "unet"
+
     def __init__(self, unet: UNet2DModel, scheduler: CMStochasticIterativeScheduler) -> None:
         super().__init__()
 
@@ -72,34 +86,6 @@ class ConsistencyModelPipeline(DiffusionPipeline):
         )
 
         self.safety_checker = None
-
-    def enable_model_cpu_offload(self, gpu_id=0):
-        r"""
-        Offload all models to CPU to reduce memory usage with a low impact on performance. Moves one whole model at a
-        time to the GPU when its `forward` method is called, and the model remains in GPU until the next model runs.
-        Memory savings are lower than using `enable_sequential_cpu_offload`, but performance is much better due to the
-        iterative execution of the `unet`.
-        """
-        if is_accelerate_available() and is_accelerate_version(">=", "0.17.0.dev0"):
-            from accelerate import cpu_offload_with_hook
-        else:
-            raise ImportError("`enable_model_cpu_offload` requires `accelerate v0.17.0` or higher.")
-
-        device = torch.device(f"cuda:{gpu_id}")
-
-        if self.device.type != "cpu":
-            self.to("cpu", silence_dtype_warnings=True)
-            torch.cuda.empty_cache()  # otherwise we don't see the memory savings (but they probably exist)
-
-        hook = None
-        for cpu_offloaded_model in [self.unet]:
-            _, hook = cpu_offload_with_hook(cpu_offloaded_model, device, prev_module_hook=hook)
-
-        if self.safety_checker is not None:
-            _, hook = cpu_offload_with_hook(self.safety_checker, device, prev_module_hook=hook)
-
-        # We'll offload the last model manually.
-        self.final_offload_hook = hook
 
     def prepare_latents(self, batch_size, num_channels, height, width, dtype, device, generator, latents=None):
         shape = (batch_size, num_channels, height, width)
@@ -119,7 +105,7 @@ class ConsistencyModelPipeline(DiffusionPipeline):
         return latents
 
     # Follows diffusers.VaeImageProcessor.postprocess
-    def postprocess_image(self, sample: torch.FloatTensor, output_type: str = "pil"):
+    def postprocess_image(self, sample: torch.Tensor, output_type: str = "pil"):
         if output_type not in ["pt", "np", "pil"]:
             raise ValueError(
                 f"output_type={output_type} is not supported. Make sure to choose one of ['pt', 'np', or 'pil']"
@@ -187,10 +173,10 @@ class ConsistencyModelPipeline(DiffusionPipeline):
         num_inference_steps: int = 1,
         timesteps: List[int] = None,
         generator: Optional[Union[torch.Generator, List[torch.Generator]]] = None,
-        latents: Optional[torch.FloatTensor] = None,
+        latents: Optional[torch.Tensor] = None,
         output_type: Optional[str] = "pil",
         return_dict: bool = True,
-        callback: Optional[Callable[[int, int, torch.FloatTensor], None]] = None,
+        callback: Optional[Callable[[int, int, torch.Tensor], None]] = None,
         callback_steps: int = 1,
     ):
         r"""
@@ -209,7 +195,7 @@ class ConsistencyModelPipeline(DiffusionPipeline):
             generator (`torch.Generator`, *optional*):
                 A [`torch.Generator`](https://pytorch.org/docs/stable/generated/torch.Generator.html) to make
                 generation deterministic.
-            latents (`torch.FloatTensor`, *optional*):
+            latents (`torch.Tensor`, *optional*):
                 Pre-generated noisy latents sampled from a Gaussian distribution, to be used as inputs for image
                 generation. Can be used to tweak the same generation with different prompts. If not provided, a latents
                 tensor is generated by sampling using the supplied random `generator`.
@@ -219,7 +205,7 @@ class ConsistencyModelPipeline(DiffusionPipeline):
                 Whether or not to return a [`~pipelines.ImagePipelineOutput`] instead of a plain tuple.
             callback (`Callable`, *optional*):
                 A function that calls every `callback_steps` steps during inference. The function is called with the
-                following arguments: `callback(step: int, timestep: int, latents: torch.FloatTensor)`.
+                following arguments: `callback(step: int, timestep: int, latents: torch.Tensor)`.
             callback_steps (`int`, *optional*, defaults to 1):
                 The frequency at which the `callback` function is called. If not specified, the callback is called at
                 every step.
@@ -280,9 +266,8 @@ class ConsistencyModelPipeline(DiffusionPipeline):
         # 6. Post-process image sample
         image = self.postprocess_image(sample, output_type=output_type)
 
-        # Offload last model to CPU
-        if hasattr(self, "final_offload_hook") and self.final_offload_hook is not None:
-            self.final_offload_hook.offload()
+        # Offload all models
+        self.maybe_free_model_hooks()
 
         if not return_dict:
             return (image,)

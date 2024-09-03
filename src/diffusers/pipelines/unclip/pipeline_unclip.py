@@ -1,4 +1,4 @@
-# Copyright 2023 Kakao Brain and The HuggingFace Team. All rights reserved.
+# Copyright 2024 Kakao Brain and The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -22,7 +22,8 @@ from transformers.models.clip.modeling_clip import CLIPTextModelOutput
 
 from ...models import PriorTransformer, UNet2DConditionModel, UNet2DModel
 from ...schedulers import UnCLIPScheduler
-from ...utils import logging, randn_tensor
+from ...utils import logging
+from ...utils.torch_utils import randn_tensor
 from ..pipeline_utils import DiffusionPipeline, ImagePipelineOutput
 from .text_proj import UnCLIPTextProjModel
 
@@ -74,6 +75,8 @@ class UnCLIPPipeline(DiffusionPipeline):
     prior_scheduler: UnCLIPScheduler
     decoder_scheduler: UnCLIPScheduler
     super_res_scheduler: UnCLIPScheduler
+
+    model_cpu_offload_seq = "text_encoder->text_proj->decoder->super_res_first->super_res_last"
 
     def __init__(
         self,
@@ -153,15 +156,15 @@ class UnCLIPPipeline(DiffusionPipeline):
             text_encoder_output = self.text_encoder(text_input_ids.to(device))
 
             prompt_embeds = text_encoder_output.text_embeds
-            text_encoder_hidden_states = text_encoder_output.last_hidden_state
+            text_enc_hid_states = text_encoder_output.last_hidden_state
 
         else:
             batch_size = text_model_output[0].shape[0]
-            prompt_embeds, text_encoder_hidden_states = text_model_output[0], text_model_output[1]
+            prompt_embeds, text_enc_hid_states = text_model_output[0], text_model_output[1]
             text_mask = text_attention_mask
 
         prompt_embeds = prompt_embeds.repeat_interleave(num_images_per_prompt, dim=0)
-        text_encoder_hidden_states = text_encoder_hidden_states.repeat_interleave(num_images_per_prompt, dim=0)
+        text_enc_hid_states = text_enc_hid_states.repeat_interleave(num_images_per_prompt, dim=0)
         text_mask = text_mask.repeat_interleave(num_images_per_prompt, dim=0)
 
         if do_classifier_free_guidance:
@@ -178,7 +181,7 @@ class UnCLIPPipeline(DiffusionPipeline):
             negative_prompt_embeds_text_encoder_output = self.text_encoder(uncond_input.input_ids.to(device))
 
             negative_prompt_embeds = negative_prompt_embeds_text_encoder_output.text_embeds
-            uncond_text_encoder_hidden_states = negative_prompt_embeds_text_encoder_output.last_hidden_state
+            uncond_text_enc_hid_states = negative_prompt_embeds_text_encoder_output.last_hidden_state
 
             # duplicate unconditional embeddings for each generation per prompt, using mps friendly method
 
@@ -186,9 +189,9 @@ class UnCLIPPipeline(DiffusionPipeline):
             negative_prompt_embeds = negative_prompt_embeds.repeat(1, num_images_per_prompt)
             negative_prompt_embeds = negative_prompt_embeds.view(batch_size * num_images_per_prompt, seq_len)
 
-            seq_len = uncond_text_encoder_hidden_states.shape[1]
-            uncond_text_encoder_hidden_states = uncond_text_encoder_hidden_states.repeat(1, num_images_per_prompt, 1)
-            uncond_text_encoder_hidden_states = uncond_text_encoder_hidden_states.view(
+            seq_len = uncond_text_enc_hid_states.shape[1]
+            uncond_text_enc_hid_states = uncond_text_enc_hid_states.repeat(1, num_images_per_prompt, 1)
+            uncond_text_enc_hid_states = uncond_text_enc_hid_states.view(
                 batch_size * num_images_per_prompt, seq_len, -1
             )
             uncond_text_mask = uncond_text_mask.repeat_interleave(num_images_per_prompt, dim=0)
@@ -199,11 +202,11 @@ class UnCLIPPipeline(DiffusionPipeline):
             # Here we concatenate the unconditional and text embeddings into a single batch
             # to avoid doing two forward passes
             prompt_embeds = torch.cat([negative_prompt_embeds, prompt_embeds])
-            text_encoder_hidden_states = torch.cat([uncond_text_encoder_hidden_states, text_encoder_hidden_states])
+            text_enc_hid_states = torch.cat([uncond_text_enc_hid_states, text_enc_hid_states])
 
             text_mask = torch.cat([uncond_text_mask, text_mask])
 
-        return prompt_embeds, text_encoder_hidden_states, text_mask
+        return prompt_embeds, text_enc_hid_states, text_mask
 
     @torch.no_grad()
     def __call__(
@@ -214,9 +217,9 @@ class UnCLIPPipeline(DiffusionPipeline):
         decoder_num_inference_steps: int = 25,
         super_res_num_inference_steps: int = 7,
         generator: Optional[Union[torch.Generator, List[torch.Generator]]] = None,
-        prior_latents: Optional[torch.FloatTensor] = None,
-        decoder_latents: Optional[torch.FloatTensor] = None,
-        super_res_latents: Optional[torch.FloatTensor] = None,
+        prior_latents: Optional[torch.Tensor] = None,
+        decoder_latents: Optional[torch.Tensor] = None,
+        super_res_latents: Optional[torch.Tensor] = None,
         text_model_output: Optional[Union[CLIPTextModelOutput, Tuple]] = None,
         text_attention_mask: Optional[torch.Tensor] = None,
         prior_guidance_scale: float = 4.0,
@@ -245,11 +248,11 @@ class UnCLIPPipeline(DiffusionPipeline):
             generator (`torch.Generator` or `List[torch.Generator]`, *optional*):
                 A [`torch.Generator`](https://pytorch.org/docs/stable/generated/torch.Generator.html) to make
                 generation deterministic.
-            prior_latents (`torch.FloatTensor` of shape (batch size, embeddings dimension), *optional*):
+            prior_latents (`torch.Tensor` of shape (batch size, embeddings dimension), *optional*):
                 Pre-generated noisy latents to be used as inputs for the prior.
-            decoder_latents (`torch.FloatTensor` of shape (batch size, channels, height, width), *optional*):
+            decoder_latents (`torch.Tensor` of shape (batch size, channels, height, width), *optional*):
                 Pre-generated noisy latents to be used as inputs for the decoder.
-            super_res_latents (`torch.FloatTensor` of shape (batch size, channels, super res height, super res width), *optional*):
+            super_res_latents (`torch.Tensor` of shape (batch size, channels, super res height, super res width), *optional*):
                 Pre-generated noisy latents to be used as inputs for the decoder.
             prior_guidance_scale (`float`, *optional*, defaults to 4.0):
                 A higher guidance scale value encourages the model to generate images closely linked to the text
@@ -290,7 +293,7 @@ class UnCLIPPipeline(DiffusionPipeline):
 
         do_classifier_free_guidance = prior_guidance_scale > 1.0 or decoder_guidance_scale > 1.0
 
-        prompt_embeds, text_encoder_hidden_states, text_mask = self._encode_prompt(
+        prompt_embeds, text_enc_hid_states, text_mask = self._encode_prompt(
             prompt, device, num_images_per_prompt, do_classifier_free_guidance, text_model_output, text_attention_mask
         )
 
@@ -318,7 +321,7 @@ class UnCLIPPipeline(DiffusionPipeline):
                 latent_model_input,
                 timestep=t,
                 proj_embedding=prompt_embeds,
-                encoder_hidden_states=text_encoder_hidden_states,
+                encoder_hidden_states=text_enc_hid_states,
                 attention_mask=text_mask,
             ).predicted_image_embedding
 
@@ -349,10 +352,10 @@ class UnCLIPPipeline(DiffusionPipeline):
 
         # decoder
 
-        text_encoder_hidden_states, additive_clip_time_embeddings = self.text_proj(
+        text_enc_hid_states, additive_clip_time_embeddings = self.text_proj(
             image_embeddings=image_embeddings,
             prompt_embeds=prompt_embeds,
-            text_encoder_hidden_states=text_encoder_hidden_states,
+            text_encoder_hidden_states=text_enc_hid_states,
             do_classifier_free_guidance=do_classifier_free_guidance,
         )
 
@@ -374,7 +377,7 @@ class UnCLIPPipeline(DiffusionPipeline):
 
         decoder_latents = self.prepare_latents(
             (batch_size, num_channels_latents, height, width),
-            text_encoder_hidden_states.dtype,
+            text_enc_hid_states.dtype,
             device,
             generator,
             decoder_latents,
@@ -388,7 +391,7 @@ class UnCLIPPipeline(DiffusionPipeline):
             noise_pred = self.decoder(
                 sample=latent_model_input,
                 timestep=t,
-                encoder_hidden_states=text_encoder_hidden_states,
+                encoder_hidden_states=text_enc_hid_states,
                 class_labels=additive_clip_time_embeddings,
                 attention_mask=decoder_text_mask,
             ).sample
@@ -474,8 +477,9 @@ class UnCLIPPipeline(DiffusionPipeline):
         image = super_res_latents
         # done super res
 
-        # post processing
+        self.maybe_free_model_hooks()
 
+        # post processing
         image = image * 0.5 + 0.5
         image = image.clamp(0, 1)
         image = image.cpu().permute(0, 2, 3, 1).float().numpy()

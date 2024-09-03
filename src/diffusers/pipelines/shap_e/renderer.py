@@ -1,4 +1,4 @@
-# Copyright 2023 Open AI and The HuggingFace Team. All rights reserved.
+# Copyright 2024 Open AI and The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -844,7 +844,7 @@ class ShapERenderer(ModelMixin, ConfigMixin):
         transmittance(t[i + 1]) := transmittance(t[i]). 4) The last term is integration to infinity (e.g. [t[-1],
         math.inf]) that is evaluated by the void_model (i.e. we consider this space to be empty).
 
-        args:
+        Args:
             rays: [batch_size x ... x 2 x 3] origin and direction. sampler: disjoint volume integrals. n_samples:
             number of ts to sample. prev_model_outputs: model outputs from the previous rendering step, including
 
@@ -911,7 +911,7 @@ class ShapERenderer(ModelMixin, ConfigMixin):
         n_coarse_samples=64,
         n_fine_samples=128,
     ):
-        # project the the paramters from the generated latents
+        # project the parameters from the generated latents
         projected_params = self.params_proj(latents)
 
         # update the mlp layers of the renderer
@@ -955,7 +955,7 @@ class ShapERenderer(ModelMixin, ConfigMixin):
         query_batch_size: int = 4096,
         texture_channels: Tuple = ("R", "G", "B"),
     ):
-        # 1. project the the paramters from the generated latents
+        # 1. project the parameters from the generated latents
         projected_params = self.params_proj(latents)
 
         # 2. update the mlp layers of the renderer

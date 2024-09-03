@@ -1,5 +1,5 @@
 # coding=utf-8
-# Copyright 2023 The HuggingFace Inc. team.
+# Copyright 2024 The HuggingFace Inc. team.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,7 +12,8 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-""" PyTorch - Flax general utilities."""
+"""PyTorch - Flax general utilities."""
+
 import re
 
 import jax.numpy as jnp
@@ -42,9 +43,25 @@ def rename_key(key):
 # and https://github.com/patil-suraj/stable-diffusion-jax/blob/main/stable_diffusion_jax/convert_diffusers_to_jax.py
 def rename_key_and_reshape_tensor(pt_tuple_key, pt_tensor, random_flax_state_dict):
     """Rename PT weight names to corresponding Flax weight names and reshape tensor if necessary"""
-
     # conv norm or layer norm
     renamed_pt_tuple_key = pt_tuple_key[:-1] + ("scale",)
+
+    # rename attention layers
+    if len(pt_tuple_key) > 1:
+        for rename_from, rename_to in (
+            ("to_out_0", "proj_attn"),
+            ("to_k", "key"),
+            ("to_v", "value"),
+            ("to_q", "query"),
+        ):
+            if pt_tuple_key[-2] == rename_from:
+                weight_name = pt_tuple_key[-1]
+                weight_name = "kernel" if weight_name == "weight" else weight_name
+                renamed_pt_tuple_key = pt_tuple_key[:-2] + (rename_to, weight_name)
+                if renamed_pt_tuple_key in random_flax_state_dict:
+                    assert random_flax_state_dict[renamed_pt_tuple_key].shape == pt_tensor.T.shape
+                    return renamed_pt_tuple_key, pt_tensor.T
+
     if (
         any("norm" in str_ for str_ in pt_tuple_key)
         and (pt_tuple_key[-1] == "bias")

@@ -1,4 +1,4 @@
-# Copyright 2023 The HuggingFace Team. All rights reserved.
+# Copyright 2024 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -17,7 +17,8 @@ from typing import List, Optional, Tuple, Union
 
 import torch
 
-from ...utils import logging, randn_tensor
+from ...utils import logging
+from ...utils.torch_utils import randn_tensor
 from ..pipeline_utils import AudioPipelineOutput, DiffusionPipeline
 
 
@@ -38,6 +39,8 @@ class DanceDiffusionPipeline(DiffusionPipeline):
             A scheduler to be used in combination with `unet` to denoise the encoded audio latents. Can be one of
             [`IPNDMScheduler`].
     """
+
+    model_cpu_offload_seq = "unet"
 
     def __init__(self, unet, scheduler):
         super().__init__()

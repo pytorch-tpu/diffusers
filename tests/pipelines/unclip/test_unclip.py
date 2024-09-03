@@ -1,5 +1,5 @@
 # coding=utf-8
-# Copyright 2023 HuggingFace Inc.
+# Copyright 2024 HuggingFace Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -22,8 +22,14 @@ from transformers import CLIPTextConfig, CLIPTextModelWithProjection, CLIPTokeni
 
 from diffusers import PriorTransformer, UnCLIPPipeline, UnCLIPScheduler, UNet2DConditionModel, UNet2DModel
 from diffusers.pipelines.unclip.text_proj import UnCLIPTextProjModel
-from diffusers.utils import load_numpy, nightly, slow, torch_device
-from diffusers.utils.testing_utils import enable_full_determinism, require_torch_gpu, skip_mps
+from diffusers.utils.testing_utils import (
+    enable_full_determinism,
+    load_numpy,
+    nightly,
+    require_torch_gpu,
+    skip_mps,
+    torch_device,
+)
 
 from ..pipeline_params import TEXT_TO_IMAGE_BATCH_PARAMS, TEXT_TO_IMAGE_PARAMS
 from ..test_pipelines_common import PipelineTesterMixin, assert_mean_pixel_difference
@@ -227,7 +233,7 @@ class UnCLIPPipelineFastTests(PipelineTesterMixin, unittest.TestCase):
             "prior_num_inference_steps": 2,
             "decoder_num_inference_steps": 2,
             "super_res_num_inference_steps": 2,
-            "output_type": "numpy",
+            "output_type": "np",
         }
         return inputs
 
@@ -367,8 +373,6 @@ class UnCLIPPipelineFastTests(PipelineTesterMixin, unittest.TestCase):
     # because UnCLIP undeterminism requires a looser check.
     @skip_mps
     def test_inference_batch_single_identical(self):
-        test_max_difference = torch_device == "cpu"
-        relax_max_difference = True
         additional_params_copy_to_batched_inputs = [
             "prior_num_inference_steps",
             "decoder_num_inference_steps",
@@ -376,9 +380,7 @@ class UnCLIPPipelineFastTests(PipelineTesterMixin, unittest.TestCase):
         ]
 
         self._test_inference_batch_single_identical(
-            test_max_difference=test_max_difference,
-            relax_max_difference=relax_max_difference,
-            additional_params_copy_to_batched_inputs=additional_params_copy_to_batched_inputs,
+            additional_params_copy_to_batched_inputs=additional_params_copy_to_batched_inputs, expected_max_diff=5e-3
         )
 
     def test_inference_batch_consistent(self):
@@ -406,15 +408,25 @@ class UnCLIPPipelineFastTests(PipelineTesterMixin, unittest.TestCase):
 
     @skip_mps
     def test_save_load_local(self):
-        return super().test_save_load_local()
+        return super().test_save_load_local(expected_max_difference=5e-3)
 
     @skip_mps
     def test_save_load_optional_components(self):
         return super().test_save_load_optional_components()
 
+    @unittest.skip("UnCLIP produces very large differences in fp16 vs fp32. Test is not useful.")
+    def test_float16_inference(self):
+        super().test_float16_inference(expected_max_diff=1.0)
+
 
 @nightly
 class UnCLIPPipelineCPUIntegrationTests(unittest.TestCase):
+    def setUp(self):
+        # clean up the VRAM before each test
+        super().setUp()
+        gc.collect()
+        torch.cuda.empty_cache()
+
     def tearDown(self):
         # clean up the VRAM after each test
         super().tearDown()
@@ -444,9 +456,15 @@ class UnCLIPPipelineCPUIntegrationTests(unittest.TestCase):
         assert np.abs(expected_image - image).max() < 1e-1
 
 
-@slow
+@nightly
 @require_torch_gpu
 class UnCLIPPipelineIntegrationTests(unittest.TestCase):
+    def setUp(self):
+        # clean up the VRAM before each test
+        super().setUp()
+        gc.collect()
+        torch.cuda.empty_cache()
+
     def tearDown(self):
         # clean up the VRAM after each test
         super().tearDown()
@@ -482,7 +500,6 @@ class UnCLIPPipelineIntegrationTests(unittest.TestCase):
         torch.cuda.reset_peak_memory_stats()
 
         pipe = UnCLIPPipeline.from_pretrained("kakaobrain/karlo-v1-alpha", torch_dtype=torch.float16)
-        pipe = pipe.to(torch_device)
         pipe.set_progress_bar_config(disable=None)
         pipe.enable_attention_slicing()
         pipe.enable_sequential_cpu_offload()

@@ -1,5 +1,5 @@
 # coding=utf-8
-# Copyright 2023 HuggingFace Inc.
+# Copyright 2024 HuggingFace Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -20,8 +20,7 @@ import numpy as np
 import torch
 
 from diffusers import DanceDiffusionPipeline, IPNDMScheduler, UNet1DModel
-from diffusers.utils import slow, torch_device
-from diffusers.utils.testing_utils import enable_full_determinism, require_torch_gpu, skip_mps
+from diffusers.utils.testing_utils import enable_full_determinism, nightly, require_torch_gpu, skip_mps, torch_device
 
 from ..pipeline_params import UNCONDITIONAL_AUDIO_GENERATION_BATCH_PARAMS, UNCONDITIONAL_AUDIO_GENERATION_PARAMS
 from ..test_pipelines_common import PipelineTesterMixin
@@ -116,9 +115,15 @@ class DanceDiffusionPipelineFastTests(PipelineTesterMixin, unittest.TestCase):
         super().test_inference_batch_single_identical(expected_max_diff=3e-3)
 
 
-@slow
+@nightly
 @require_torch_gpu
 class PipelineIntegrationTests(unittest.TestCase):
+    def setUp(self):
+        # clean up the VRAM before each test
+        super().setUp()
+        gc.collect()
+        torch.cuda.empty_cache()
+
     def tearDown(self):
         # clean up the VRAM after each test
         super().tearDown()
@@ -138,7 +143,7 @@ class PipelineIntegrationTests(unittest.TestCase):
 
         audio_slice = audio[0, -3:, -3:]
 
-        assert audio.shape == (1, 2, pipe.unet.sample_size)
+        assert audio.shape == (1, 2, pipe.unet.config.sample_size)
         expected_slice = np.array([-0.0192, -0.0231, -0.0318, -0.0059, 0.0002, -0.0020])
 
         assert np.abs(audio_slice.flatten() - expected_slice).max() < 1e-2
@@ -156,7 +161,7 @@ class PipelineIntegrationTests(unittest.TestCase):
 
         audio_slice = audio[0, -3:, -3:]
 
-        assert audio.shape == (1, 2, pipe.unet.sample_size)
+        assert audio.shape == (1, 2, pipe.unet.config.sample_size)
         expected_slice = np.array([-0.0367, -0.0488, -0.0771, -0.0525, -0.0444, -0.0341])
 
         assert np.abs(audio_slice.flatten() - expected_slice).max() < 1e-2

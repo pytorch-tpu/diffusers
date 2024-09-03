@@ -1,4 +1,4 @@
-<!--Copyright 2023 The HuggingFace Team. All rights reserved.
+<!--Copyright 2024 The HuggingFace Team. All rights reserved.
 
 Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
 the License. You may obtain a copy of the License at
@@ -14,7 +14,7 @@ specific language governing permissions and limitations under the License.
 
 [[open-in-colab]]
 
-🧨 Diffusers is designed to be a user-friendly and flexible toolbox for building diffusion systems tailored to your use-case. At the core of the toolbox are models and schedulers. While the [`DiffusionPipeline`] bundles these components together for convenience, you can also unbundle the pipeline and use the models and schedulers separately to create new diffusion systems. 
+🧨 Diffusers is designed to be a user-friendly and flexible toolbox for building diffusion systems tailored to your use-case. At the core of the toolbox are models and schedulers. While the [`DiffusionPipeline`] bundles these components together for convenience, you can also unbundle the pipeline and use the models and schedulers separately to create new diffusion systems.
 
 In this tutorial, you'll learn how to use models and schedulers to assemble a diffusion system for inference, starting with a basic pipeline and then progressing to the Stable Diffusion pipeline.
 
@@ -25,7 +25,7 @@ A pipeline is a quick and easy way to run a model for inference, requiring no mo
 ```py
 >>> from diffusers import DDPMPipeline
 
->>> ddpm = DDPMPipeline.from_pretrained("google/ddpm-cat-256").to("cuda")
+>>> ddpm = DDPMPipeline.from_pretrained("google/ddpm-cat-256", use_safetensors=True).to("cuda")
 >>> image = ddpm(num_inference_steps=25).images[0]
 >>> image
 ```
@@ -36,7 +36,7 @@ A pipeline is a quick and easy way to run a model for inference, requiring no mo
 
 That was super easy, but how did the pipeline do that? Let's breakdown the pipeline and take a look at what's happening under the hood.
 
-In the example above, the pipeline contains a [`UNet2DModel`] model and a [`DDPMScheduler`]. The pipeline denoises an image by taking random noise the size of the desired output and passing it through the model several times. At each timestep, the model predicts the *noise residual* and the scheduler uses it to predict a less noisy image. The pipeline repeats this process until it reaches the end of the specified number of inference steps. 
+In the example above, the pipeline contains a [`UNet2DModel`] model and a [`DDPMScheduler`]. The pipeline denoises an image by taking random noise the size of the desired output and passing it through the model several times. At each timestep, the model predicts the *noise residual* and the scheduler uses it to predict a less noisy image. The pipeline repeats this process until it reaches the end of the specified number of inference steps.
 
 To recreate the pipeline with the model and scheduler separately, let's write our own denoising process.
 
@@ -46,7 +46,7 @@ To recreate the pipeline with the model and scheduler separately, let's write ou
 >>> from diffusers import DDPMScheduler, UNet2DModel
 
 >>> scheduler = DDPMScheduler.from_pretrained("google/ddpm-cat-256")
->>> model = UNet2DModel.from_pretrained("google/ddpm-cat-256").to("cuda")
+>>> model = UNet2DModel.from_pretrained("google/ddpm-cat-256", use_safetensors=True).to("cuda")
 ```
 
 2. Set the number of timesteps to run the denoising process for:
@@ -71,7 +71,7 @@ tensor([980, 960, 940, 920, 900, 880, 860, 840, 820, 800, 780, 760, 740, 720,
 >>> import torch
 
 >>> sample_size = model.config.sample_size
->>> noise = torch.randn((1, 3, sample_size, sample_size)).to("cuda")
+>>> noise = torch.randn((1, 3, sample_size, sample_size), device="cuda")
 ```
 
 5. Now write a loop to iterate over the timesteps. At each timestep, the model does a [`UNet2DModel.forward`] pass and returns the noisy residual. The scheduler's [`~DDPMScheduler.step`] method takes the noisy residual, timestep, and input and it predicts the image at the previous timestep. This output becomes the next input to the model in the denoising loop, and it'll repeat until it reaches the end of the `timesteps` array.
@@ -94,9 +94,9 @@ This is the entire denoising process, and you can use this same pattern to write
 >>> from PIL import Image
 >>> import numpy as np
 
->>> image = (input / 2 + 0.5).clamp(0, 1)
->>> image = image.cpu().permute(0, 2, 3, 1).numpy()[0]
->>> image = Image.fromarray((image * 255).round().astype("uint8"))
+>>> image = (input / 2 + 0.5).clamp(0, 1).squeeze()
+>>> image = (image.permute(1, 2, 0) * 255).round().to(torch.uint8).cpu().numpy()
+>>> image = Image.fromarray(image)
 >>> image
 ```
 
@@ -112,7 +112,7 @@ As you can see, this is already more complex than the DDPM pipeline which only c
 
 <Tip>
 
-💡 Read the [How does Stable Diffusion work?](https://huggingface.co/blog/stable_diffusion#how-does-stable-diffusion-work) blog for more details about how the VAE, UNet, and text encoder models.
+💡 Read the [How does Stable Diffusion work?](https://huggingface.co/blog/stable_diffusion#how-does-stable-diffusion-work) blog for more details about how the VAE, UNet, and text encoder models work.
 
 </Tip>
 
@@ -124,10 +124,14 @@ Now that you know what you need for the Stable Diffusion pipeline, load all thes
 >>> from transformers import CLIPTextModel, CLIPTokenizer
 >>> from diffusers import AutoencoderKL, UNet2DConditionModel, PNDMScheduler
 
->>> vae = AutoencoderKL.from_pretrained("CompVis/stable-diffusion-v1-4", subfolder="vae")
+>>> vae = AutoencoderKL.from_pretrained("CompVis/stable-diffusion-v1-4", subfolder="vae", use_safetensors=True)
 >>> tokenizer = CLIPTokenizer.from_pretrained("CompVis/stable-diffusion-v1-4", subfolder="tokenizer")
->>> text_encoder = CLIPTextModel.from_pretrained("CompVis/stable-diffusion-v1-4", subfolder="text_encoder")
->>> unet = UNet2DConditionModel.from_pretrained("CompVis/stable-diffusion-v1-4", subfolder="unet")
+>>> text_encoder = CLIPTextModel.from_pretrained(
+...     "CompVis/stable-diffusion-v1-4", subfolder="text_encoder", use_safetensors=True
+... )
+>>> unet = UNet2DConditionModel.from_pretrained(
+...     "CompVis/stable-diffusion-v1-4", subfolder="unet", use_safetensors=True
+... )
 ```
 
 Instead of the default [`PNDMScheduler`], exchange it for the [`UniPCMultistepScheduler`] to see how easy it is to plug a different scheduler in:
@@ -149,7 +153,7 @@ To speed up inference, move the models to a GPU since, unlike the scheduler, the
 
 ### Create text embeddings
 
-The next step is to tokenize the text to generate embeddings. The text is used to condition the UNet model and steer the diffusion process towards something that resembles the input prompt. 
+The next step is to tokenize the text to generate embeddings. The text is used to condition the UNet model and steer the diffusion process towards something that resembles the input prompt.
 
 <Tip>
 
@@ -165,7 +169,7 @@ Feel free to choose any prompt you like if you want to generate something else!
 >>> width = 512  # default width of Stable Diffusion
 >>> num_inference_steps = 25  # Number of denoising steps
 >>> guidance_scale = 7.5  # Scale for classifier-free guidance
->>> generator = torch.manual_seed(0)  # Seed generator to create the inital latent noise
+>>> generator = torch.manual_seed(0)  # Seed generator to create the initial latent noise
 >>> batch_size = len(prompt)
 ```
 
@@ -210,10 +214,10 @@ Next, generate some initial random noise as a starting point for the diffusion p
 
 ```py
 >>> latents = torch.randn(
-...     (batch_size, unet.in_channels, height // 8, width // 8),
+...     (batch_size, unet.config.in_channels, height // 8, width // 8),
 ...     generator=generator,
+...     device=torch_device,
 ... )
->>> latents = latents.to(torch_device)
 ```
 
 ### Denoise the image
@@ -267,11 +271,10 @@ with torch.no_grad():
 Lastly, convert the image to a `PIL.Image` to see your generated image!
 
 ```py
->>> image = (image / 2 + 0.5).clamp(0, 1)
->>> image = image.detach().cpu().permute(0, 2, 3, 1).numpy()
->>> images = (image * 255).round().astype("uint8")
->>> pil_images = [Image.fromarray(image) for image in images]
->>> pil_images[0]
+>>> image = (image / 2 + 0.5).clamp(0, 1).squeeze()
+>>> image = (image.permute(1, 2, 0) * 255).to(torch.uint8).cpu().numpy()
+>>> image = Image.fromarray(image)
+>>> image
 ```
 
 <div class="flex justify-center">
@@ -280,11 +283,11 @@ Lastly, convert the image to a `PIL.Image` to see your generated image!
 
 ## Next steps
 
-From basic to complex pipelines, you've seen that all you really need to write your own diffusion system is a denoising loop. The loop should set the scheduler's timesteps, iterate over them, and alternate between calling the UNet model to predict the noise residual and passing it to the scheduler to compute the previous noisy sample. 
+From basic to complex pipelines, you've seen that all you really need to write your own diffusion system is a denoising loop. The loop should set the scheduler's timesteps, iterate over them, and alternate between calling the UNet model to predict the noise residual and passing it to the scheduler to compute the previous noisy sample.
 
 This is really what 🧨 Diffusers is designed for: to make it intuitive and easy to write your own diffusion system using models and schedulers.
 
 For your next steps, feel free to:
 
-* Learn how to [build and contribute a pipeline](contribute_pipeline) to 🧨 Diffusers. We can't wait and see what you'll come up with!
+* Learn how to [build and contribute a pipeline](../using-diffusers/contribute_pipeline) to 🧨 Diffusers. We can't wait and see what you'll come up with!
 * Explore [existing pipelines](../api/pipelines/overview) in the library, and see if you can deconstruct and build a pipeline from scratch using the models and schedulers separately.

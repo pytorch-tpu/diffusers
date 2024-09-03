@@ -1,5 +1,5 @@
 # coding=utf-8
-# Copyright 2023 HuggingFace Inc.
+# Copyright 2024 HuggingFace Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -32,17 +32,26 @@ from diffusers import (
     StableDiffusionDiffEditPipeline,
     UNet2DConditionModel,
 )
-from diffusers.utils import load_image, slow
-from diffusers.utils.testing_utils import enable_full_determinism, floats_tensor, require_torch_gpu, torch_device
+from diffusers.utils.testing_utils import (
+    enable_full_determinism,
+    floats_tensor,
+    load_image,
+    nightly,
+    numpy_cosine_similarity_distance,
+    require_torch_gpu,
+    torch_device,
+)
 
 from ..pipeline_params import TEXT_GUIDED_IMAGE_INPAINTING_BATCH_PARAMS, TEXT_GUIDED_IMAGE_INPAINTING_PARAMS
-from ..test_pipelines_common import PipelineLatentTesterMixin, PipelineTesterMixin
+from ..test_pipelines_common import PipelineFromPipeTesterMixin, PipelineLatentTesterMixin, PipelineTesterMixin
 
 
 enable_full_determinism()
 
 
-class StableDiffusionDiffEditPipelineFastTests(PipelineLatentTesterMixin, PipelineTesterMixin, unittest.TestCase):
+class StableDiffusionDiffEditPipelineFastTests(
+    PipelineLatentTesterMixin, PipelineTesterMixin, PipelineFromPipeTesterMixin, unittest.TestCase
+):
     pipeline_class = StableDiffusionDiffEditPipeline
     params = TEXT_GUIDED_IMAGE_INPAINTING_PARAMS - {"height", "width", "image"} | {"image_latents"}
     batch_params = TEXT_GUIDED_IMAGE_INPAINTING_BATCH_PARAMS - {"image"} | {"image_latents"}
@@ -136,7 +145,7 @@ class StableDiffusionDiffEditPipelineFastTests(PipelineLatentTesterMixin, Pipeli
             "num_inference_steps": 2,
             "inpaint_strength": 1.0,
             "guidance_scale": 6.0,
-            "output_type": "numpy",
+            "output_type": "np",
         }
 
         return inputs
@@ -158,7 +167,7 @@ class StableDiffusionDiffEditPipelineFastTests(PipelineLatentTesterMixin, Pipeli
             "num_maps_per_mask": 2,
             "mask_encode_strength": 1.0,
             "guidance_scale": 6.0,
-            "output_type": "numpy",
+            "output_type": "np",
         }
 
         return inputs
@@ -179,7 +188,7 @@ class StableDiffusionDiffEditPipelineFastTests(PipelineLatentTesterMixin, Pipeli
             "inpaint_strength": 1.0,
             "guidance_scale": 6.0,
             "decode_latents": True,
-            "output_type": "numpy",
+            "output_type": "np",
         }
         return inputs
 
@@ -250,7 +259,7 @@ class StableDiffusionDiffEditPipelineFastTests(PipelineLatentTesterMixin, Pipeli
 
         self.assertEqual(image.shape, (2, 32, 32, 3))
         expected_slice = np.array(
-            [0.5150, 0.5134, 0.5043, 0.5376, 0.4694, 0.5105, 0.5015, 0.4407, 0.4799],
+            [0.5160, 0.5115, 0.5060, 0.5456, 0.4704, 0.5060, 0.5019, 0.4405, 0.4726],
         )
         max_diff = np.abs(image_slice.flatten() - expected_slice).max()
         self.assertLessEqual(max_diff, 1e-3)
@@ -284,8 +293,13 @@ class StableDiffusionDiffEditPipelineFastTests(PipelineLatentTesterMixin, Pipeli
 
 
 @require_torch_gpu
-@slow
+@nightly
 class StableDiffusionDiffEditPipelineIntegrationTests(unittest.TestCase):
+    def setUp(self):
+        super().setUp()
+        gc.collect()
+        torch.cuda.empty_cache()
+
     def tearDown(self):
         super().tearDown()
         gc.collect()
@@ -296,8 +310,7 @@ class StableDiffusionDiffEditPipelineIntegrationTests(unittest.TestCase):
         raw_image = load_image(
             "https://huggingface.co/datasets/hf-internal-testing/diffusers-images/resolve/main/diffedit/fruit.png"
         )
-
-        raw_image = raw_image.convert("RGB").resize((768, 768))
+        raw_image = raw_image.convert("RGB").resize((256, 256))
 
         cls.raw_image = raw_image
 
@@ -305,9 +318,11 @@ class StableDiffusionDiffEditPipelineIntegrationTests(unittest.TestCase):
         generator = torch.manual_seed(0)
 
         pipe = StableDiffusionDiffEditPipeline.from_pretrained(
-            "stabilityai/stable-diffusion-2-1", safety_checker=None, torch_dtype=torch.float16
+            "stabilityai/stable-diffusion-2-1-base", safety_checker=None, torch_dtype=torch.float16
         )
         pipe.scheduler = DDIMScheduler.from_config(pipe.scheduler.config)
+        pipe.scheduler.clip_sample = True
+
         pipe.inverse_scheduler = DDIMInverseScheduler.from_config(pipe.scheduler.config)
         pipe.enable_model_cpu_offload()
         pipe.set_progress_bar_config(disable=None)
@@ -323,7 +338,11 @@ class StableDiffusionDiffEditPipelineIntegrationTests(unittest.TestCase):
         )
 
         inv_latents = pipe.invert(
-            prompt=source_prompt, image=self.raw_image, inpaint_strength=0.7, generator=generator
+            prompt=source_prompt,
+            image=self.raw_image,
+            inpaint_strength=0.7,
+            generator=generator,
+            num_inference_steps=5,
         ).latents
 
         image = pipe(
@@ -333,7 +352,8 @@ class StableDiffusionDiffEditPipelineIntegrationTests(unittest.TestCase):
             generator=generator,
             negative_prompt=source_prompt,
             inpaint_strength=0.7,
-            output_type="numpy",
+            num_inference_steps=5,
+            output_type="np",
         ).images[0]
 
         expected_image = (
@@ -341,11 +361,36 @@ class StableDiffusionDiffEditPipelineIntegrationTests(unittest.TestCase):
                 load_image(
                     "https://huggingface.co/datasets/hf-internal-testing/diffusers-images/resolve/main"
                     "/diffedit/pears.png"
-                ).resize((768, 768))
+                ).resize((256, 256))
             )
             / 255
         )
-        assert np.abs((expected_image - image).max()) < 5e-1
+
+        assert numpy_cosine_similarity_distance(expected_image.flatten(), image.flatten()) < 2e-1
+
+
+@nightly
+@require_torch_gpu
+class StableDiffusionDiffEditPipelineNightlyTests(unittest.TestCase):
+    def setUp(self):
+        super().setUp()
+        gc.collect()
+        torch.cuda.empty_cache()
+
+    def tearDown(self):
+        super().tearDown()
+        gc.collect()
+        torch.cuda.empty_cache()
+
+    @classmethod
+    def setUpClass(cls):
+        raw_image = load_image(
+            "https://huggingface.co/datasets/hf-internal-testing/diffusers-images/resolve/main/diffedit/fruit.png"
+        )
+
+        raw_image = raw_image.convert("RGB").resize((768, 768))
+
+        cls.raw_image = raw_image
 
     def test_stable_diffusion_diffedit_dpm(self):
         generator = torch.manual_seed(0)
@@ -384,7 +429,7 @@ class StableDiffusionDiffEditPipelineIntegrationTests(unittest.TestCase):
             negative_prompt=source_prompt,
             inpaint_strength=0.7,
             num_inference_steps=25,
-            output_type="numpy",
+            output_type="np",
         ).images[0]
 
         expected_image = (

@@ -1,4 +1,4 @@
-<!--Copyright 2023 The HuggingFace Team. All rights reserved.
+<!--Copyright 2024 The HuggingFace Team. All rights reserved.
 
 Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
 the License. You may obtain a copy of the License at
@@ -9,14 +9,14 @@ Unless required by applicable law or agreed to in writing, software distributed 
 an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
 specific language governing permissions and limitations under the License.
 -->
-                                                               
+
 # Effective and efficient diffusion
 
 [[open-in-colab]]
 
-Getting the [`DiffusionPipeline`] to generate images in a certain style or include what you want can be tricky. Often times, you have to run the [`DiffusionPipeline`] several times before you end up with an image you're happy with. But generating something out of nothing is a computationally intensive process, especially if you're running inference over and over again. 
+Getting the [`DiffusionPipeline`] to generate images in a certain style or include what you want can be tricky. Often times, you have to run the [`DiffusionPipeline`] several times before you end up with an image you're happy with. But generating something out of nothing is a computationally intensive process, especially if you're running inference over and over again.
 
-This is why it's important to get the most *computational* (speed) and *memory* (GPU RAM) efficiency from the pipeline to reduce the time between inference cycles so you can iterate faster.
+This is why it's important to get the most *computational* (speed) and *memory* (GPU vRAM) efficiency from the pipeline to reduce the time between inference cycles so you can iterate faster.
 
 This tutorial walks you through how to generate faster and better with the [`DiffusionPipeline`].
 
@@ -26,7 +26,7 @@ Begin by loading the [`runwayml/stable-diffusion-v1-5`](https://huggingface.co/r
 from diffusers import DiffusionPipeline
 
 model_id = "runwayml/stable-diffusion-v1-5"
-pipeline = DiffusionPipeline.from_pretrained(model_id)
+pipeline = DiffusionPipeline.from_pretrained(model_id, use_safetensors=True)
 ```
 
 The example prompt you'll use is a portrait of an old warrior chief, but feel free to use your own prompt:
@@ -49,7 +49,7 @@ One of the simplest ways to speed up inference is to place the pipeline on a GPU
 pipeline = pipeline.to("cuda")
 ```
 
-To make sure you can use the same image and improve on it, use a [`Generator`](https://pytorch.org/docs/stable/generated/torch.Generator.html) and set a seed for [reproducibility](./using-diffusers/reproducibility):
+To make sure you can use the same image and improve on it, use a [`Generator`](https://pytorch.org/docs/stable/generated/torch.Generator.html) and set a seed for [reproducibility](./using-diffusers/reusing_seeds):
 
 ```python
 import torch
@@ -68,14 +68,14 @@ image
     <img src="https://huggingface.co/datasets/diffusers/docs-images/resolve/main/stable_diffusion_101/sd_101_1.png">
 </div>
 
-This process took ~30 seconds on a T4 GPU (it might be faster if your allocated GPU is better than a T4). By default, the [`DiffusionPipeline`] runs inference with full `float32` precision for 50 inference steps. You can speed this up by switching to a lower precision like `float16` or running fewer inference steps. 
+This process took ~30 seconds on a T4 GPU (it might be faster if your allocated GPU is better than a T4). By default, the [`DiffusionPipeline`] runs inference with full `float32` precision for 50 inference steps. You can speed this up by switching to a lower precision like `float16` or running fewer inference steps.
 
 Let's start by loading the model in `float16` and generate an image:
 
 ```python
 import torch
 
-pipeline = DiffusionPipeline.from_pretrained(model_id, torch_dtype=torch.float16)
+pipeline = DiffusionPipeline.from_pretrained(model_id, torch_dtype=torch.float16, use_safetensors=True)
 pipeline = pipeline.to("cuda")
 generator = torch.Generator("cuda").manual_seed(0)
 image = pipeline(prompt, generator=generator).images[0]
@@ -108,6 +108,7 @@ pipeline.scheduler.compatibles
     diffusers.schedulers.scheduling_ddpm.DDPMScheduler,
     diffusers.schedulers.scheduling_dpmsolver_singlestep.DPMSolverSinglestepScheduler,
     diffusers.schedulers.scheduling_k_dpm_2_ancestral_discrete.KDPM2AncestralDiscreteScheduler,
+    diffusers.utils.dummy_torch_and_torchsde_objects.DPMSolverSDEScheduler,
     diffusers.schedulers.scheduling_heun_discrete.HeunDiscreteScheduler,
     diffusers.schedulers.scheduling_pndm.PNDMScheduler,
     diffusers.schedulers.scheduling_euler_ancestral_discrete.EulerAncestralDiscreteScheduler,
@@ -115,7 +116,7 @@ pipeline.scheduler.compatibles
 ]
 ```
 
-The Stable Diffusion model uses the [`PNDMScheduler`] by default which usually requires ~50 inference steps, but more performant schedulers like [`DPMSolverMultistepScheduler`], require only ~20 or 25 inference steps. Use the [`ConfigMixin.from_config`] method to load a new scheduler:
+The Stable Diffusion model uses the [`PNDMScheduler`] by default which usually requires ~50 inference steps, but more performant schedulers like [`DPMSolverMultistepScheduler`], require only ~20 or 25 inference steps. Use the [`~ConfigMixin.from_config`] method to load a new scheduler:
 
 ```python
 from diffusers import DPMSolverMultistepScheduler
@@ -152,29 +153,16 @@ def get_inputs(batch_size=1):
     return {"prompt": prompts, "generator": generator, "num_inference_steps": num_inference_steps}
 ```
 
-You'll also need a function that'll display each batch of images:
-
-```python
-from PIL import Image
-
-
-def image_grid(imgs, rows=2, cols=2):
-    w, h = imgs[0].size
-    grid = Image.new("RGB", size=(cols * w, rows * h))
-
-    for i, img in enumerate(imgs):
-        grid.paste(img, box=(i % cols * w, i // cols * h))
-    return grid
-```
-
 Start with `batch_size=4` and see how much memory you've consumed:
 
 ```python
+from diffusers.utils import make_image_grid
+
 images = pipeline(**get_inputs(batch_size=4)).images
-image_grid(images)
+make_image_grid(images, 2, 2)
 ```
 
-Unless you have a GPU with more RAM, the code above probably returned an `OOM` error! Most of the memory is taken up by the cross-attention layers. Instead of running this operation in a batch, you can run it sequentially to save a significant amount of memory. All you have to do is configure the pipeline to use the [`~DiffusionPipeline.enable_attention_slicing`] function:
+Unless you have a GPU with more vRAM, the code above probably returned an `OOM` error! Most of the memory is taken up by the cross-attention layers. Instead of running this operation in a batch, you can run it sequentially to save a significant amount of memory. All you have to do is configure the pipeline to use the [`~DiffusionPipeline.enable_attention_slicing`] function:
 
 ```python
 pipeline.enable_attention_slicing()
@@ -184,7 +172,7 @@ Now try increasing the `batch_size` to 8!
 
 ```python
 images = pipeline(**get_inputs(batch_size=8)).images
-image_grid(images, rows=2, cols=4)
+make_image_grid(images, rows=2, cols=4)
 ```
 
 <div class="flex justify-center">
@@ -205,7 +193,7 @@ As the field grows, there are more and more high-quality checkpoints finetuned t
 
 ### Better pipeline components
 
-You can also try replacing the current pipeline components with a newer version. Let's try loading the latest [autodecoder](https://huggingface.co/stabilityai/stable-diffusion-2-1/tree/main/vae) from Stability AI into the pipeline, and generate some images:
+You can also try replacing the current pipeline components with a newer version. Let's try loading the latest [autoencoder](https://huggingface.co/stabilityai/stable-diffusion-2-1/tree/main/vae) from Stability AI into the pipeline, and generate some images:
 
 ```python
 from diffusers import AutoencoderKL
@@ -213,7 +201,7 @@ from diffusers import AutoencoderKL
 vae = AutoencoderKL.from_pretrained("stabilityai/sd-vae-ft-mse", torch_dtype=torch.float16).to("cuda")
 pipeline.vae = vae
 images = pipeline(**get_inputs(batch_size=8)).images
-image_grid(images, rows=2, cols=4)
+make_image_grid(images, rows=2, cols=4)
 ```
 
 <div class="flex justify-center">
@@ -238,7 +226,7 @@ Generate a batch of images with the new prompt:
 
 ```python
 images = pipeline(**get_inputs(batch_size=8)).images
-image_grid(images, rows=2, cols=4)
+make_image_grid(images, rows=2, cols=4)
 ```
 
 <div class="flex justify-center">
@@ -250,14 +238,14 @@ Pretty impressive! Let's tweak the second image - corresponding to the `Generato
 ```python
 prompts = [
     "portrait photo of the oldest warrior chief, tribal panther make up, blue on red, side profile, looking away, serious eyes 50mm portrait photography, hard rim lighting photography--beta --ar 2:3  --beta --upbeta",
-    "portrait photo of a old warrior chief, tribal panther make up, blue on red, side profile, looking away, serious eyes 50mm portrait photography, hard rim lighting photography--beta --ar 2:3  --beta --upbeta",
+    "portrait photo of an old warrior chief, tribal panther make up, blue on red, side profile, looking away, serious eyes 50mm portrait photography, hard rim lighting photography--beta --ar 2:3  --beta --upbeta",
     "portrait photo of a warrior chief, tribal panther make up, blue on red, side profile, looking away, serious eyes 50mm portrait photography, hard rim lighting photography--beta --ar 2:3  --beta --upbeta",
     "portrait photo of a young warrior chief, tribal panther make up, blue on red, side profile, looking away, serious eyes 50mm portrait photography, hard rim lighting photography--beta --ar 2:3  --beta --upbeta",
 ]
 
 generator = [torch.Generator("cuda").manual_seed(1) for _ in range(len(prompts))]
 images = pipeline(prompt=prompts, generator=generator, num_inference_steps=25).images
-image_grid(images)
+make_image_grid(images, 2, 2)
 ```
 
 <div class="flex justify-center">

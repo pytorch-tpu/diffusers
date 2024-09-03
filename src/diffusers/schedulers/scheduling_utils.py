@@ -1,4 +1,4 @@
-# Copyright 2023 The HuggingFace Team. All rights reserved.
+# Copyright 2024 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -15,11 +15,12 @@ import importlib
 import os
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Dict, Optional, Union
+from typing import Optional, Union
 
 import torch
+from huggingface_hub.utils import validate_hf_hub_args
 
-from ..utils import BaseOutput
+from ..utils import BaseOutput, PushToHubMixin
 
 
 SCHEDULER_CONFIG_NAME = "scheduler_config.json"
@@ -44,29 +45,45 @@ class KarrasDiffusionSchedulers(Enum):
     DEISMultistepScheduler = 12
     UniPCMultistepScheduler = 13
     DPMSolverSDEScheduler = 14
+    EDMEulerScheduler = 15
+
+
+AysSchedules = {
+    "StableDiffusionTimesteps": [999, 850, 736, 645, 545, 455, 343, 233, 124, 24],
+    "StableDiffusionSigmas": [14.615, 6.475, 3.861, 2.697, 1.886, 1.396, 0.963, 0.652, 0.399, 0.152, 0.0],
+    "StableDiffusionXLTimesteps": [999, 845, 730, 587, 443, 310, 193, 116, 53, 13],
+    "StableDiffusionXLSigmas": [14.615, 6.315, 3.771, 2.181, 1.342, 0.862, 0.555, 0.380, 0.234, 0.113, 0.0],
+    "StableDiffusionVideoSigmas": [700.00, 54.5, 15.886, 7.977, 4.248, 1.789, 0.981, 0.403, 0.173, 0.034, 0.0],
+}
 
 
 @dataclass
 class SchedulerOutput(BaseOutput):
     """
-    Base class for the scheduler's step function output.
+    Base class for the output of a scheduler's `step` function.
 
     Args:
-        prev_sample (`torch.FloatTensor` of shape `(batch_size, num_channels, height, width)` for images):
-            Computed sample (x_{t-1}) of previous timestep. `prev_sample` should be used as next model input in the
+        prev_sample (`torch.Tensor` of shape `(batch_size, num_channels, height, width)` for images):
+            Computed sample `(x_{t-1})` of previous timestep. `prev_sample` should be used as next model input in the
             denoising loop.
     """
 
-    prev_sample: torch.FloatTensor
+    prev_sample: torch.Tensor
 
 
-class SchedulerMixin:
+class SchedulerMixin(PushToHubMixin):
     """
-    Mixin containing common functions for the schedulers.
+    Base class for all schedulers.
+
+    [`SchedulerMixin`] contains common functions shared by all schedulers such as general loading and saving
+    functionalities.
+
+    [`ConfigMixin`] takes care of storing the configuration attributes (like `num_train_timesteps`) that are passed to
+    the scheduler's `__init__` function, and the attributes can be accessed by `scheduler.config.num_train_timesteps`.
 
     Class attributes:
-        - **_compatibles** (`List[str]`) -- A list of classes that are compatible with the parent class, so that
-          `from_config` can be used from a class different than the one used to save the config (should be overridden
+        - **_compatibles** (`List[str]`) -- A list of scheduler classes that are compatible with the parent scheduler
+          class. Use [`~ConfigMixin.from_config`] to load a different compatible scheduler class (should be overridden
           by parent class).
     """
 
@@ -75,64 +92,57 @@ class SchedulerMixin:
     has_compatibles = True
 
     @classmethod
+    @validate_hf_hub_args
     def from_pretrained(
         cls,
-        pretrained_model_name_or_path: Dict[str, Any] = None,
+        pretrained_model_name_or_path: Optional[Union[str, os.PathLike]] = None,
         subfolder: Optional[str] = None,
         return_unused_kwargs=False,
         **kwargs,
     ):
         r"""
-        Instantiate a Scheduler class from a pre-defined JSON configuration file inside a directory or Hub repo.
+        Instantiate a scheduler from a pre-defined JSON configuration file in a local directory or Hub repository.
 
         Parameters:
             pretrained_model_name_or_path (`str` or `os.PathLike`, *optional*):
                 Can be either:
 
-                    - A string, the *model id* of a model repo on huggingface.co. Valid model ids should have an
-                      organization name, like `google/ddpm-celebahq-256`.
-                    - A path to a *directory* containing the schedluer configurations saved using
-                      [`~SchedulerMixin.save_pretrained`], e.g., `./my_model_directory/`.
+                    - A string, the *model id* (for example `google/ddpm-celebahq-256`) of a pretrained model hosted on
+                      the Hub.
+                    - A path to a *directory* (for example `./my_model_directory`) containing the scheduler
+                      configuration saved with [`~SchedulerMixin.save_pretrained`].
             subfolder (`str`, *optional*):
-                In case the relevant files are located inside a subfolder of the model repo (either remote in
-                huggingface.co or downloaded locally), you can specify the folder name here.
+                The subfolder location of a model file within a larger model repository on the Hub or locally.
             return_unused_kwargs (`bool`, *optional*, defaults to `False`):
                 Whether kwargs that are not consumed by the Python class should be returned or not.
             cache_dir (`Union[str, os.PathLike]`, *optional*):
-                Path to a directory in which a downloaded pretrained model configuration should be cached if the
-                standard cache should not be used.
+                Path to a directory where a downloaded pretrained model configuration is cached if the standard cache
+                is not used.
             force_download (`bool`, *optional*, defaults to `False`):
                 Whether or not to force the (re-)download of the model weights and configuration files, overriding the
                 cached versions if they exist.
-            resume_download (`bool`, *optional*, defaults to `False`):
-                Whether or not to delete incompletely received files. Will attempt to resume the download if such a
-                file exists.
+
             proxies (`Dict[str, str]`, *optional*):
-                A dictionary of proxy servers to use by protocol or endpoint, e.g., `{'http': 'foo.bar:3128',
+                A dictionary of proxy servers to use by protocol or endpoint, for example, `{'http': 'foo.bar:3128',
                 'http://hostname': 'foo.bar:4012'}`. The proxies are used on each request.
             output_loading_info(`bool`, *optional*, defaults to `False`):
                 Whether or not to also return a dictionary containing missing keys, unexpected keys and error messages.
             local_files_only(`bool`, *optional*, defaults to `False`):
-                Whether or not to only look at local files (i.e., do not try to download the model).
-            use_auth_token (`str` or *bool*, *optional*):
-                The token to use as HTTP bearer authorization for remote files. If `True`, will use the token generated
-                when running `transformers-cli login` (stored in `~/.huggingface`).
+                Whether to only load local model weights and configuration files or not. If set to `True`, the model
+                won't be downloaded from the Hub.
+            token (`str` or *bool*, *optional*):
+                The token to use as HTTP bearer authorization for remote files. If `True`, the token generated from
+                `diffusers-cli login` (stored in `~/.huggingface`) is used.
             revision (`str`, *optional*, defaults to `"main"`):
-                The specific model version to use. It can be a branch name, a tag name, or a commit id, since we use a
-                git-based system for storing models and other artifacts on huggingface.co, so `revision` can be any
-                identifier allowed by git.
+                The specific model version to use. It can be a branch name, a tag name, a commit id, or any identifier
+                allowed by Git.
 
         <Tip>
 
-         It is required to be logged in (`huggingface-cli login`) when you want to use private or [gated
-         models](https://huggingface.co/docs/hub/models-gated#gated-models).
-
-        </Tip>
-
-        <Tip>
-
-        Activate the special ["offline-mode"](https://huggingface.co/transformers/installation.html#offline-mode) to
-        use this method in a firewalled environment.
+        To use private or [gated models](https://huggingface.co/docs/hub/models-gated#gated-models), log-in with
+        `huggingface-cli login`. You can also activate the special
+        ["offline-mode"](https://huggingface.co/diffusers/installation.html#offline-mode) to use this method in a
+        firewalled environment.
 
         </Tip>
 
@@ -148,12 +158,18 @@ class SchedulerMixin:
 
     def save_pretrained(self, save_directory: Union[str, os.PathLike], push_to_hub: bool = False, **kwargs):
         """
-        Save a scheduler configuration object to the directory `save_directory`, so that it can be re-loaded using the
+        Save a scheduler configuration object to a directory so that it can be reloaded using the
         [`~SchedulerMixin.from_pretrained`] class method.
 
         Args:
             save_directory (`str` or `os.PathLike`):
                 Directory where the configuration JSON file will be saved (will be created if it does not exist).
+            push_to_hub (`bool`, *optional*, defaults to `False`):
+                Whether or not to push your model to the Hugging Face Hub after saving it. You can specify the
+                repository you want to push to with `repo_id` (will default to the name of `save_directory` in your
+                namespace).
+            kwargs (`Dict[str, Any]`, *optional*):
+                Additional keyword arguments passed along to the [`~utils.PushToHubMixin.push_to_hub`] method.
         """
         self.save_config(save_directory=save_directory, push_to_hub=push_to_hub, **kwargs)
 

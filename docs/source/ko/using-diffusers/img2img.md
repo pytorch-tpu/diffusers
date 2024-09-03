@@ -1,4 +1,4 @@
-<!--Copyright 2023 The HuggingFace Team. All rights reserved.
+<!--Copyright 2024 The HuggingFace Team. All rights reserved.
 
 Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
 the License. You may obtain a copy of the License at
@@ -12,7 +12,7 @@ specific language governing permissions and limitations under the License.
 
 # 텍스트 기반 image-to-image 생성
 
-[[Colab에서 열기]]
+[[open-in-colab]]
 
 [`StableDiffusionImg2ImgPipeline`]을 사용하면 텍스트 프롬프트와 시작 이미지를 전달하여 새 이미지 생성의 조건을 지정할 수 있습니다.
 

@@ -1,5 +1,5 @@
 # coding=utf-8
-# Copyright 2023 HuggingFace Inc.
+# Copyright 2024 HuggingFace Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -26,11 +26,22 @@ from diffusers import (
     StableDiffusionAttendAndExcitePipeline,
     UNet2DConditionModel,
 )
-from diffusers.utils import load_numpy, skip_mps, slow
-from diffusers.utils.testing_utils import require_torch_gpu
+from diffusers.utils.testing_utils import (
+    load_numpy,
+    nightly,
+    numpy_cosine_similarity_distance,
+    require_torch_gpu,
+    skip_mps,
+    torch_device,
+)
 
 from ..pipeline_params import TEXT_TO_IMAGE_BATCH_PARAMS, TEXT_TO_IMAGE_IMAGE_PARAMS, TEXT_TO_IMAGE_PARAMS
-from ..test_pipelines_common import PipelineKarrasSchedulerTesterMixin, PipelineLatentTesterMixin, PipelineTesterMixin
+from ..test_pipelines_common import (
+    PipelineFromPipeTesterMixin,
+    PipelineKarrasSchedulerTesterMixin,
+    PipelineLatentTesterMixin,
+    PipelineTesterMixin,
+)
 
 
 torch.backends.cuda.matmul.allow_tf32 = False
@@ -38,7 +49,11 @@ torch.backends.cuda.matmul.allow_tf32 = False
 
 @skip_mps
 class StableDiffusionAttendAndExcitePipelineFastTests(
-    PipelineLatentTesterMixin, PipelineKarrasSchedulerTesterMixin, PipelineTesterMixin, unittest.TestCase
+    PipelineLatentTesterMixin,
+    PipelineKarrasSchedulerTesterMixin,
+    PipelineTesterMixin,
+    PipelineFromPipeTesterMixin,
+    unittest.TestCase,
 ):
     pipeline_class = StableDiffusionAttendAndExcitePipeline
     test_attention_slicing = False
@@ -127,17 +142,23 @@ class StableDiffusionAttendAndExcitePipelineFastTests(
             generator = torch.manual_seed(seed)
         else:
             generator = torch.Generator(device=device).manual_seed(seed)
-        inputs = inputs = {
+        inputs = {
             "prompt": "a cat and a frog",
             "token_indices": [2, 5],
             "generator": generator,
             "num_inference_steps": 1,
             "guidance_scale": 6.0,
-            "output_type": "numpy",
+            "output_type": "np",
             "max_iter_to_alter": 2,
             "thresholds": {0: 0.7},
         }
         return inputs
+
+    def test_dict_tuple_outputs_equivalent(self):
+        expected_slice = None
+        if torch_device == "cpu":
+            expected_slice = np.array([0.6391, 0.6290, 0.4860, 0.5134, 0.5550, 0.4577, 0.5033, 0.5023, 0.4538])
+        super().test_dict_tuple_outputs_equivalent(expected_slice=expected_slice, expected_max_difference=3e-3)
 
     def test_inference(self):
         device = "cpu"
@@ -158,8 +179,8 @@ class StableDiffusionAttendAndExcitePipelineFastTests(
         max_diff = np.abs(image_slice.flatten() - expected_slice).max()
         self.assertLessEqual(max_diff, 1e-3)
 
-    def test_cpu_offload_forward_pass(self):
-        super().test_cpu_offload_forward_pass(expected_max_diff=5e-4)
+    def test_sequential_cpu_offload_forward_pass(self):
+        super().test_sequential_cpu_offload_forward_pass(expected_max_diff=5e-4)
 
     def test_inference_batch_consistent(self):
         # NOTE: Larger batch sizes cause this test to timeout, only test on smaller batches
@@ -167,9 +188,6 @@ class StableDiffusionAttendAndExcitePipelineFastTests(
 
     def test_inference_batch_single_identical(self):
         self._test_inference_batch_single_identical(batch_size=2, expected_max_diff=7e-4)
-
-    def test_dict_tuple_outputs_equivalent(self):
-        super().test_dict_tuple_outputs_equivalent(expected_max_difference=3e-3)
 
     def test_pt_np_pil_outputs_equivalent(self):
         super().test_pt_np_pil_outputs_equivalent(expected_max_diff=5e-4)
@@ -180,9 +198,15 @@ class StableDiffusionAttendAndExcitePipelineFastTests(
     def test_save_load_optional_components(self):
         super().test_save_load_optional_components(expected_max_difference=4e-4)
 
+    def test_karras_schedulers_shape(self):
+        super().test_karras_schedulers_shape(num_inference_steps_for_strength_for_iterations=3)
+
+    def test_from_pipe_consistent_forward_pass_cpu_offload(self):
+        super().test_from_pipe_consistent_forward_pass_cpu_offload(expected_max_diff=5e-3)
+
 
 @require_torch_gpu
-@slow
+@nightly
 class StableDiffusionAttendAndExcitePipelineIntegrationTests(unittest.TestCase):
     # Attend and excite requires being able to run a backward pass at
     # inference time. There's no deterministic backward operator for pad
@@ -196,6 +220,11 @@ class StableDiffusionAttendAndExcitePipelineIntegrationTests(unittest.TestCase):
     def tearDownClass(cls):
         super().tearDownClass()
         torch.use_deterministic_algorithms(True)
+
+    def setUp(self):
+        super().setUp()
+        gc.collect()
+        torch.cuda.empty_cache()
 
     def tearDown(self):
         super().tearDown()
@@ -220,10 +249,11 @@ class StableDiffusionAttendAndExcitePipelineIntegrationTests(unittest.TestCase):
             generator=generator,
             num_inference_steps=5,
             max_iter_to_alter=5,
-            output_type="numpy",
+            output_type="np",
         ).images[0]
 
         expected_image = load_numpy(
             "https://huggingface.co/datasets/hf-internal-testing/diffusers-images/resolve/main/attend-and-excite/elephant_glasses.npy"
         )
-        assert np.abs((expected_image - image).max()) < 5e-1
+        max_diff = numpy_cosine_similarity_distance(image.flatten(), expected_image.flatten())
+        assert max_diff < 5e-1

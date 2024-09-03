@@ -1,4 +1,4 @@
-<!--Copyright 2023 The HuggingFace Team. All rights reserved.
+<!--Copyright 2024 The HuggingFace Team. All rights reserved.
 
 Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
 the License. You may obtain a copy of the License at
@@ -51,7 +51,7 @@ logger.warning("WARN")
 
 All methods of the logging module are documented below. The main methods are
 [`logging.get_verbosity`] to get the current level of verbosity in the logger and
-[`logging.set_verbosity`] to set the verbosity to the level of your choice. 
+[`logging.set_verbosity`] to set the verbosity to the level of your choice.
 
 In order from the least verbose to the most verbose:
 
@@ -67,30 +67,30 @@ By default, `tqdm` progress bars are displayed during model download. [`logging.
 
 ## Base setters
 
-[[autodoc]] logging.set_verbosity_error
+[[autodoc]] utils.logging.set_verbosity_error
 
-[[autodoc]] logging.set_verbosity_warning
+[[autodoc]] utils.logging.set_verbosity_warning
 
-[[autodoc]] logging.set_verbosity_info
+[[autodoc]] utils.logging.set_verbosity_info
 
-[[autodoc]] logging.set_verbosity_debug
+[[autodoc]] utils.logging.set_verbosity_debug
 
 ## Other functions
 
-[[autodoc]] logging.get_verbosity
+[[autodoc]] utils.logging.get_verbosity
 
-[[autodoc]] logging.set_verbosity
+[[autodoc]] utils.logging.set_verbosity
 
-[[autodoc]] logging.get_logger
+[[autodoc]] utils.logging.get_logger
 
-[[autodoc]] logging.enable_default_handler
+[[autodoc]] utils.logging.enable_default_handler
 
-[[autodoc]] logging.disable_default_handler
+[[autodoc]] utils.logging.disable_default_handler
 
-[[autodoc]] logging.enable_explicit_format
+[[autodoc]] utils.logging.enable_explicit_format
 
-[[autodoc]] logging.reset_format
+[[autodoc]] utils.logging.reset_format
 
-[[autodoc]] logging.enable_progress_bar
+[[autodoc]] utils.logging.enable_progress_bar
 
-[[autodoc]] logging.disable_progress_bar
+[[autodoc]] utils.logging.disable_progress_bar

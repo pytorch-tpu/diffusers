@@ -20,7 +20,7 @@ class UniDiffuserTextDecoder(ModelMixin, ConfigMixin, ModuleUtilsMixin):
         prefix_length (`int`):
             Max number of prefix tokens that will be supplied to the model.
         prefix_inner_dim (`int`):
-            The hidden size of the the incoming prefix embeddings. For UniDiffuser, this would be the hidden dim of the
+            The hidden size of the incoming prefix embeddings. For UniDiffuser, this would be the hidden dim of the
             CLIP text encoder.
         prefix_hidden_dim (`int`, *optional*):
             Hidden dim of the MLP if we encode the prefix.
@@ -220,7 +220,7 @@ class UniDiffuserTextDecoder(ModelMixin, ConfigMixin, ModuleUtilsMixin):
             input_ids (`torch.LongTensor` of shape `(batch_size, input_ids_length)`, *optional*):
                 Tokenizer indices of input sequence tokens in the vocabulary. One of `input_ids` and `input_embeds`
                 must be supplied.
-            input_embeds (`torch.FloatTensor` of shape `(batch_size, seq_len, hidden_size)`, *optional*):
+            input_embeds (`torch.Tensor` of shape `(batch_size, seq_len, hidden_size)`, *optional*):
                 An embedded representation to directly pass to the transformer as a prefix for beam search. One of
                 `input_ids` and `input_embeds` must be supplied.
             device:
