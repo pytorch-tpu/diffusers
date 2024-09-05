@@ -1,14 +1,6 @@
-from typing import Tuple
-import sys
 import argparse
-import logging
-import math
 import os
 import random
-import shutil
-import itertools
-from contextlib import nullcontext
-from pathlib import Path
 
 import time
 import datasets
@@ -16,49 +8,24 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 import torch.utils.checkpoint
-import transformers
 
-from packaging import version
 from torchvision import transforms
-from tqdm.auto import tqdm
 from transformers import CLIPTextModel, CLIPTokenizer
-from transformers.utils import ContextManagers
 
-import diffusers
 from diffusers import (
     AutoencoderKL,
     DDPMScheduler,
     StableDiffusionPipeline,
     UNet2DConditionModel,
 )
-from diffusers.optimization import get_scheduler
-from diffusers.training_utils import (
-    EMAModel,
-    compute_dream_and_update_latents,
-    compute_snr,
-)
-from diffusers.utils import (
-    check_min_version,
-    deprecate,
-    is_wandb_available,
-    make_image_grid,
-)
-from diffusers.utils.hub_utils import load_or_create_model_card, populate_model_card
-from diffusers.utils.import_utils import is_xformers_available
-from diffusers.utils.torch_utils import is_compiled_module
+from diffusers.training_utils import compute_snr
 
 import torch_xla
 import torch_xla.core.xla_model as xm
-import torch_xla.distributed.xla_backend
 import torch_xla.debug.profiler as xp
-import torch_xla.distributed.xla_multiprocessing as xmp
 import torch_xla.distributed.parallel_loader as pl
 import torch_xla.runtime as xr
 import torch_xla.distributed.spmd as xs
-from torch.nn.parallel import DistributedDataParallel as DDP
-import torch_xla.debug.metrics as met
-import torch.distributed as dist
-import torch_xla.distributed.xla_backend
 
 PROFILE_DIR=os.environ.get('PROFILE_DIR', None)
 CACHE_DIR = os.environ.get('CACHE_DIR', None)

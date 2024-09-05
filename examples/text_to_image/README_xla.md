@@ -77,7 +77,7 @@ export CACHE_DIR=/tmp/xla_cache  # Update the cache to store compiled XLA graphs
 export DATASET_NAME=lambdalabs/naruto-blip-captions
 export PER_HOST_BATCH_SIZE=64
 export TRAIN_STEPS=50
-export OUTPUT_DIR=<output model dir>
+export OUTPUT_DIR=/tmp/output/
 python diffusers/examples/text_to_image/train_text_to_image_xla.py  \
     --pretrained_model_name_or_path=stabilityai/stable-diffusion-2-base \
     --dataset_name=$DATASET_NAME --resolution=512 --center_crop --random_flip \
