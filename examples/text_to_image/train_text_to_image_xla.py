@@ -438,11 +438,9 @@ def parse_args():
         "--mixed_precision",
         type=str,
         default=None,
-        choices=["no", "fp16", "bf16"],
+        choices=["no", "bf16"],
         help=(
-            "Whether to use mixed precision. Choose between fp16 and bf16 (bfloat16). Bf16 requires PyTorch >="
-            " 1.10.and an Nvidia Ampere GPU.  Default to the value of accelerate config of the current system or the"
-            " flag passed with the `accelerate.launch` command. Use this argument to override the accelerate config."
+            "Whether to use mixed precision. Bf16 requires PyTorch >= 1.10"
         ),
     )
     parser.add_argument(
@@ -572,9 +570,7 @@ def main(args):
     server = xp.start_server(9012)
 
     num_devices = xr.global_runtime_device_count()
-    device_ids = np.arange(num_devices)
-    mesh_shape = (num_devices, 1)
-    mesh = xs.Mesh(device_ids, mesh_shape, ('x', 'y'))
+    mesh = xs.get_1d_mesh('x')
     xs.set_global_mesh(mesh)
 
     text_encoder = CLIPTextModel.from_pretrained(
@@ -616,14 +612,10 @@ def main(args):
     # as these weights are only used for inference, keeping weights in full
     # precision is not required.
     weight_dtype = torch.float32
-    if args.mixed_precision == "fp16":
-        weight_dtype = torch.float16
-    elif args.mixed_precision == "bf16":
+    if args.mixed_precision == "bf16":
         weight_dtype = torch.bfloat16
 
     device = xm.xla_device()
-    print("device: ", device)
-    print("weight_dtype: ", weight_dtype)
 
     # Move text_encode and vae to gpu and cast to weight_dtype
     text_encoder = text_encoder.to(device, dtype=weight_dtype)

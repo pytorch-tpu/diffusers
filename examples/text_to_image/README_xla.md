@@ -35,17 +35,17 @@ Install PyTorch and PyTorch/XLA nightly versions:
 gcloud compute tpus tpu-vm ssh ${TPU_NAME} \
 --project=${PROJECT_ID} --zone=${ZONE} --worker=all \
 --command='
-pip3 install --pre torch torchvision --index-url https://download.pytorch.org/whl/nightly/cpu
-pip install 'torch_xla[tpu] @ https://storage.googleapis.com/pytorch-xla-releases/wheels/tpuvm/torch_xla-2.5.0.dev-cp310-cp310-linux_x86_64.whl' -f https://storage.googleapis.com/libtpu-releases/index.html
-' -- -o ProxyCommand='corp-ssh-helper %h %p'
+pip3 install --pre torch==2.5.0.dev20240905+cpu torchvision==0.20.0.dev20240905+cpu --index-url https://download.pytorch.org/whl/nightly/cpu
+pip install "torch_xla[tpu] @ https://storage.googleapis.com/pytorch-xla-releases/wheels/tpuvm/torch_xla-2.5.0.dev20240905-cp310-cp310-linux_x86_64.whl" -f https://storage.googleapis.com/libtpu-releases/index.html'
 ```
+This script has been tested with the above versions but it expected to work with future versions as well.
 
 Verify that PyTorch and PyTorch/XLA were installed correctly:
 
 ```bash
 gcloud compute tpus tpu-vm ssh ${TPU_NAME} \
 --project ${PROJECT_ID} --zone ${ZONE} --worker=all \
---command='python3 -c "import torch; import torch_xla;"' -- -o ProxyCommand='corp-ssh-helper %h %p
+--command='python3 -c "import torch; import torch_xla;"'
 ```
 
 Install this fork of huggingface diffusers repo:
@@ -59,7 +59,7 @@ git checkout main
 cd examples/text_to_image
 pip install -r requirements.txt
 cd ../..
-sudo pip install -e .' -- -o ProxyCommand='corp-ssh-helper %h %p'
+sudo pip install -e .'
 ```
 
 ## Run the training job
@@ -72,20 +72,19 @@ gcloud compute tpus tpu-vm ssh ${TPU_NAME} \
 --project=${PROJECT_ID} --zone=${ZONE} --worker=all \
 --command='
 export XLA_DISABLE_FUNCTIONALIZATION=1 
-export PROFILE_DIR=<directory to store profile>
-export CACHE_DIR=<directory to store compiled XLA graphs>
+export PROFILE_DIR=/tmp/profile  # Update the directory to store profiles if needed.
+export CACHE_DIR=/tmp/xla_cache  # Update the cache to store compiled XLA graphs if needed.
 export DATASET_NAME=lambdalabs/naruto-blip-captions
 export PER_HOST_BATCH_SIZE=64
 export TRAIN_STEPS=50
 export OUTPUT_DIR=<output model dir>
-python diffusers/examples/text_to_image/train_text_to_image.py  \
+python diffusers/examples/text_to_image/train_text_to_image_xla.py  \
     --pretrained_model_name_or_path=stabilityai/stable-diffusion-2-base \
     --dataset_name=$DATASET_NAME --resolution=512 --center_crop --random_flip \
     --train_batch_size=$PER_HOST_BATCH_SIZE  --max_train_steps=$TRAIN_STEPS \   
     --learning_rate=1e-06 --mixed_precision=bf16 --profile_duration=80000 \
     --output_dir=$OUTPUT_DIR --dataloader_num_workers=4 \
-    --loader_prefetch_size=4 --device_prefetch_size=4' 
-    -- -o ProxyCommand='corp-ssh-helper %h %p'
+    --loader_prefetch_size=4 --device_prefetch_size=4'
 ```
 
 ### Environment Envs Explained
