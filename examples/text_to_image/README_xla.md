@@ -75,7 +75,7 @@ export XLA_DISABLE_FUNCTIONALIZATION=1
 export PROFILE_DIR=/tmp/profile  # Update the directory to store profiles if needed.
 export CACHE_DIR=/tmp/xla_cache  # Update the cache to store compiled XLA graphs if needed.
 export DATASET_NAME=lambdalabs/naruto-blip-captions
-export PER_HOST_BATCH_SIZE=64
+export PER_HOST_BATCH_SIZE=16 # This is know to work on TPU v4. Can set this to 64 for TPU v5p.
 export TRAIN_STEPS=50
 export OUTPUT_DIR=/tmp/output/
 python diffusers/examples/text_to_image/train_text_to_image_xla.py \

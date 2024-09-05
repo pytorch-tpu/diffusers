@@ -78,8 +78,8 @@ class TrainSD():
                 xp.trace_detached('localhost:9012', PROFILE_DIR, duration_ms=args.profile_duration)
             try:
                 batch = next(self.dataloader)
-            except:
-                print("stop iteration")
+            except Exception as e:
+                print(e)
                 break
             loss = self.step_fn(batch["pixel_values"], batch["input_ids"])
             step_time = time.time() - last_time
