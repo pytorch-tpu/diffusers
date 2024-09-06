@@ -113,7 +113,7 @@ from time import time
 from typing import Tuple
 from diffusers import StableDiffusionPipeline
 
-def main(args):
+def main():
     device = xm.xla_device()
     model_path = <output_dir>
     pipe = StableDiffusionPipeline.from_pretrained(
