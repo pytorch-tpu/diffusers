@@ -82,6 +82,7 @@ class TrainSD():
                 print(e)
                 break
             loss = self.step_fn(batch["pixel_values"], batch["input_ids"])
+            xm.wait_device_ops()
             step_time = time.time() - last_time
             if step >= 10:
                 times.append(step_time)
