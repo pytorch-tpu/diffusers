@@ -69,9 +69,8 @@ class TrainSD():
         measure_start_step = 10
         assert measure_start_step<self.args.max_train_steps
         total_time = 0
-        step = 0
         last_time = time.time()
-        while True:
+        for step in range(0, self.args.max_train_steps):
             if step ==  measure_start_step and PROFILE_DIR is not None:
                 xm.wait_device_ops()
                 xp.trace_detached('localhost:9012', PROFILE_DIR, duration_ms=args.profile_duration)
@@ -80,13 +79,11 @@ class TrainSD():
             except Exception as e:
                 print(e)
                 break
-            loss = self.step_fn(batch["pixel_values"], batch["input_ids"])
-            
+            loss = self.step_fn(batch["pixel_values"], batch["input_ids"])  
             self.global_step += 1
-            step += 1
-            if step == self.args.max_train_steps:
-                xm.wait_device_ops()
-                total_time = time.time() - last_time
+
+        xm.wait_device_ops()
+        total_time = time.time() - last_time
         print(f"Average step time: {total_time/(self.args.max_train_steps-measure_start_step)}")
         xm.wait_device_ops()
 
