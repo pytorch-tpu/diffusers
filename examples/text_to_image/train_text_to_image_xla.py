@@ -82,7 +82,7 @@ class TrainSD():
                 xp.trace_detached('localhost:9012', PROFILE_DIR, duration_ms=args.profile_duration)
                 last_time = time.time()     
             loss = self.step_fn(batch["pixel_values"], batch["input_ids"])
-            self.global_step += 1           
+            self.global_step += 1
         xm.mark_step()
         if not dataloader_exception:
             xm.wait_device_ops()
