@@ -73,15 +73,15 @@ class TrainSD():
         for step in range(0, self.args.max_train_steps):
             if step ==  measure_start_step and PROFILE_DIR is not None:
                 xm.wait_device_ops()
-                last_time = time.time()
                 xp.trace_detached('localhost:9012', PROFILE_DIR, duration_ms=args.profile_duration)
+                last_time = time.time()
             try:
                 batch = next(self.dataloader)
             except Exception as e:
                 dataloader_exception = True
                 print(e)
                 break
-            loss = self.step_fn(batch["pixel_values"], batch["input_ids"])  
+            loss = self.step_fn(batch["pixel_values"], batch["input_ids"])
             self.global_step += 1
 
         if not dataloader_exception:
