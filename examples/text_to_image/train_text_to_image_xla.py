@@ -66,6 +66,7 @@ class TrainSD():
         self.optimizer.step()
 
     def start_training(self):
+        dataloader_exception = False
         measure_start_step = 10
         assert measure_start_step<self.args.max_train_steps
         total_time = 0
@@ -77,15 +78,16 @@ class TrainSD():
             try:
                 batch = next(self.dataloader)
             except Exception as e:
+                dataloader_exception = True
                 print(e)
                 break
             loss = self.step_fn(batch["pixel_values"], batch["input_ids"])  
             self.global_step += 1
 
-        xm.wait_device_ops()
-        total_time = time.time() - last_time
-        print(f"Average step time: {total_time/(self.args.max_train_steps-measure_start_step)}")
-        xm.wait_device_ops()
+        if not dataloader_exception:
+            xm.wait_device_ops()
+            total_time = time.time() - last_time
+            print(f"Average step time: {total_time/(self.args.max_train_steps-measure_start_step)}")
 
     def step_fn(
         self,
