@@ -415,12 +415,34 @@ def main(args):
         revision=args.revision,
     )
 
+    # Function to count parameters in a module
+    def count_parameters(module):
+        return sum(p.numel() for p in module.parameters())
+
+    # Print the parameter count for each main component
+    print("UNet component sizes:")
+    for name, module in unet.named_children():
+        num_params = count_parameters(module)
+        print(f"- {name}: {num_params:,} parameters")
+
+    # Find the largest component
+    largest_component = max(unet.named_children(), key=lambda x: count_parameters(x[1]))
+    print(f"\nLargest component: {largest_component[0]} with {count_parameters(largest_component[1]):,} parameters")
+
+    # Print the total number of parameters
+    total_params = count_parameters(unet)
+    print(f"\nTotal number of parameters: {total_params:,}")
+
+    # for name, param in unet.named_parameters():
+    #     print(name)
+    #     if "" in name:
+
     from torch_xla.distributed.fsdp.utils import apply_xla_patch_to_nn_linear
     unet = apply_xla_patch_to_nn_linear(unet, xs.xla_patched_nn_linear_forward)
 
-    vae.requires_grad_(False)
-    text_encoder.requires_grad_(False)
-    unet.train()
+    # vae.requires_grad_(False)
+    # text_encoder.requires_grad_(False)
+    # unet.train()
 
     # For mixed precision training we cast all non-trainable weights (vae,
     # non-lora text_encoder and non-lora unet) to half-precision
