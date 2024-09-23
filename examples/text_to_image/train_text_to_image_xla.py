@@ -420,18 +420,18 @@ def main(args):
         return sum(p.numel() for p in module.parameters())
 
     # Print the parameter count for each main component
-    print("UNet component sizes:")
+    xm.master_print("UNet component sizes:")
     for name, module in unet.named_children():
         num_params = count_parameters(module)
-        print(f"- {name}: {num_params:,} parameters")
+        xm.master_print(f"- {name}: {num_params:,} parameters")
 
     # Find the largest component
     largest_component = max(unet.named_children(), key=lambda x: count_parameters(x[1]))
-    print(f"\nLargest component: {largest_component[0]} with {count_parameters(largest_component[1]):,} parameters")
+    xm.master_print(f"\nLargest component: {largest_component[0]} with {count_parameters(largest_component[1]):,} parameters")
 
     # Print the total number of parameters
     total_params = count_parameters(unet)
-    print(f"\nTotal number of parameters: {total_params:,}")
+    xm.master_print(f"\nTotal number of parameters: {total_params:,}")
 
     # for name, param in unet.named_parameters():
     #     print(name)
