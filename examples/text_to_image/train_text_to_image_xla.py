@@ -420,18 +420,18 @@ def main(args):
         return sum(p.numel() for p in module.parameters())
 
     # Print the parameter count for each main component
-    xm.master_print("UNet component sizes:")
+    print("UNet component sizes:")
     for name, module in unet.named_children():
         num_params = count_parameters(module)
-        xm.master_print(f"- {name}: {num_params:,} parameters")
+        print(f"- {name}: {num_params:,} parameters")
 
     # Find the largest component
     largest_component = max(unet.named_children(), key=lambda x: count_parameters(x[1]))
-    xm.master_print(f"\nLargest component: {largest_component[0]} with {count_parameters(largest_component[1]):,} parameters")
+    print(f"\nLargest component: {largest_component[0]} with {count_parameters(largest_component[1]):,} parameters")
 
     # Print the total number of parameters
     total_params = count_parameters(unet)
-    xm.master_print(f"\nTotal number of parameters: {total_params:,}")
+    print(f"\nTotal number of parameters: {total_params:,}")
 
     # for name, param in unet.named_parameters():
     #     print(name)
@@ -461,7 +461,7 @@ def main(args):
     optimizer = setup_optimizer(unet, args)
     vae.requires_grad_(False)
     text_encoder.requires_grad_(False)
-    unet.train()
+    # unet.train()
 
     dataset = load_dataset(args)
     image_column, caption_column = get_column_names(dataset, args)
