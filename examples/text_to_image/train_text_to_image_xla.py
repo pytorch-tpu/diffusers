@@ -415,23 +415,7 @@ def main(args):
         revision=args.revision,
     )
 
-    # Function to count parameters in a module
-    def count_parameters(module):
-        return sum(p.numel() for p in module.parameters())
 
-    # Print the parameter count for each main component
-    print("UNet component sizes:")
-    for name, module in unet.named_children():
-        num_params = count_parameters(module)
-        print(f"- {name}: {num_params:,} parameters")
-
-    # Find the largest component
-    largest_component = max(unet.named_children(), key=lambda x: count_parameters(x[1]))
-    print(f"\nLargest component: {largest_component[0]} with {count_parameters(largest_component[1]):,} parameters")
-
-    # Print the total number of parameters
-    total_params = count_parameters(unet)
-    print(f"\nTotal number of parameters: {total_params:,}")
 
     # for name, param in unet.named_parameters():
     #     print(name)
@@ -558,6 +542,23 @@ def main(args):
             f"Total train batch size (w. parallel, distributed & accumulation) = {args.train_batch_size}"
         )
         print(f"  Total optimization steps = {args.max_train_steps}")
+                # Function to count parameters in a module
+        def count_parameters(module):
+            return sum(p.numel() for p in module.parameters())
+
+        # Print the parameter count for each main component
+        print("UNet component sizes:")
+        for name, module in unet.named_children():
+            num_params = count_parameters(module)
+            print(f"- {name}: {num_params:,} parameters")
+
+        # Find the largest component
+        largest_component = max(unet.named_children(), key=lambda x: count_parameters(x[1]))
+        print(f"\nLargest component: {largest_component[0]} with {count_parameters(largest_component[1]):,} parameters")
+
+        # Print the total number of parameters
+        total_params = count_parameters(unet)
+        print(f"\nTotal number of parameters: {total_params:,}")
 
     trainer = TrainSD(vae=vae,
                       weight_dtype=weight_dtype,
