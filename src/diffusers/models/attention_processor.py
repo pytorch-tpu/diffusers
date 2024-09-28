@@ -2377,7 +2377,8 @@ class AttnProcessor2_0:
                 attention_mask = attention_mask.float().masked_fill(attention_mask == 0, float('-inf')).masked_fill(attention_mask == 1, float(0.0))
             
                 # Apply attention mask to key
-                key = key + attention_mask        
+                key = key + attention_mask
+            query /= math.sqrt(query.shape[3])
             hidden_states = flash_attention(query, key, value, causal=False)
         else:
             hidden_states = F.scaled_dot_product_attention(
