@@ -529,11 +529,13 @@ def main(args):
         device_prefetch_size=args.device_prefetch_size,
     )
 
+    num_hosts = xr.process_count()
+    num_devices_per_host = num_devices // num_hosts
     if xm.is_master_ordinal():
         print("***** Running training *****")
-        print(f"Instantaneous batch size per device = {args.train_batch_size // num_devices}")
+        print(f"Instantaneous batch size per device = {args.train_batch_size // num_devices_per_host }")
         print(
-            f"Total train batch size (w. parallel, distributed & accumulation) = {args.train_batch_size}"
+            f"Total train batch size (w. parallel, distributed & accumulation) = {args.train_batch_size * num_hosts}"
         )
         print(f"  Total optimization steps = {args.max_train_steps}")
 
