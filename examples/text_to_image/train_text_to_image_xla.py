@@ -68,11 +68,13 @@ class TrainSD():
     def start_training(self):
         dataloader_exception = False
         measure_start_step = 10
-        assert measure_start_step < self.args.max_train_steps
+        # assert measure_start_step < self.args.max_train_steps
         total_time = 0
+        last_time = 0
         for step in range(0, self.args.max_train_steps):
             try:
                 batch = next(self.dataloader)
+                # print(f'batch pixel_value.shape: {batch["pixel_values"].size()}, input_ids.shape {batch["input_ids"].size()}')
             except Exception as e:
                 dataloader_exception = True
                 print(e)
@@ -86,7 +88,10 @@ class TrainSD():
         xm.mark_step()
         if not dataloader_exception:
             xm.wait_device_ops()
-            total_time = time.time() - last_time
+            if last_time:
+                total_time = time.time() - last_time
+            else:
+                total_time = 0
             print(f"Average step time: {total_time/(self.args.max_train_steps-measure_start_step)}")
         else:
             print("dataloader exception happen, skip result")
@@ -128,6 +133,7 @@ class TrainSD():
             model_pred = self.unet(
                 noisy_latents, timesteps, encoder_hidden_states, return_dict=False
             )[0]
+            # print(f"model predict shape {model_pred.shape}")
         with xp.Trace("model.backward"):
             if self.args.snr_gamma is None:
                 loss = F.mse_loss(model_pred.float(), target.float(), reduction="mean")
