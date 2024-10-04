@@ -385,7 +385,7 @@ def main(args):
     server = xp.start_server(9012)
 
     num_devices = xr.global_runtime_device_count()
-    mesh = xs.get_1d_mesh('x')
+    mesh = xs.get_1d_mesh('data')
     xs.set_global_mesh(mesh)
 
     text_encoder = CLIPTextModel.from_pretrained(
@@ -521,9 +521,9 @@ def main(args):
         device,
         input_sharding={
             "pixel_values": xs.ShardingSpec(
-                mesh, ("x", None, None, None), minibatch=True
+                mesh, ("data", None, None, None), minibatch=True
             ),
-            "input_ids": xs.ShardingSpec(mesh, ("x", None), minibatch=True),
+            "input_ids": xs.ShardingSpec(mesh, ("data", None), minibatch=True),
         },
         loader_prefetch_size=args.loader_prefetch_size,
         device_prefetch_size=args.device_prefetch_size,
