@@ -290,6 +290,14 @@ def parse_args():
         ),
     )
     parser.add_argument(
+        "--loader_prefetch_factor",
+        type=int,
+        default=2,
+        help=(
+            "Number of batches loaded in advance by each worker."
+        ),
+    )
+    parser.add_argument(
         "--device_prefetch_size",
         type=int,
         default=1,
@@ -514,6 +522,7 @@ def main(args):
         collate_fn=collate_fn,
         num_workers=args.dataloader_num_workers,
         batch_size=args.train_batch_size,
+        prefetch_factor=args.loader_prefetch_factor,
     )
 
     train_dataloader = pl.MpDeviceLoader(
