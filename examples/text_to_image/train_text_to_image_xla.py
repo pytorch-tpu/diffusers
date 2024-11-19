@@ -566,7 +566,7 @@ def main(args):
             f"Total train batch size (w. parallel, distributed & accumulation) = {args.train_batch_size * num_hosts}"
         )
         print(f"  Total optimization steps = {args.max_train_steps}")
-
+    os.environ['USE_SINGLE_SLICE']= 'true'
     trainer = TrainSD(vae=vae,
                       weight_dtype=weight_dtype,
                       device=device,
