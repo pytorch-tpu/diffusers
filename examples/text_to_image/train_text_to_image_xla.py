@@ -538,9 +538,8 @@ def main(args):
             device,
             input_sharding={
                 "pixel_values": xs.ShardingSpec(
-                    mesh, (("dcn", "data"), None, None, None), minibatch=True
-                ),
-                "input_ids": xs.ShardingSpec(mesh, (("dcn", "data"), None), minibatch=True),
+                    mesh, (("dcn", "data"), None, None, None)),
+                "input_ids": xs.ShardingSpec(mesh, (("dcn", "data"), None)),
             },
             loader_prefetch_size=args.loader_prefetch_size,
             device_prefetch_size=args.device_prefetch_size,
@@ -551,9 +550,8 @@ def main(args):
             device,
             input_sharding={
                 "pixel_values": xs.ShardingSpec(
-                    mesh, ("data", None, None, None), minibatch=True
-                ),
-                "input_ids": xs.ShardingSpec(mesh, ("data", None), minibatch=True),
+                    mesh, ("data", None, None, None)),
+                "input_ids": xs.ShardingSpec(mesh, ("data", None)),
             },
             loader_prefetch_size=args.loader_prefetch_size,
             device_prefetch_size=args.device_prefetch_size,
