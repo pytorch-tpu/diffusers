@@ -399,6 +399,7 @@ def main(args):
         ici_mesh_shape = (1, num_devices // dcn_axis)
         dcn_mesh_shape = (dcn_axis, 1)
         mesh = xs.HybridMesh(ici_mesh_shape=ici_mesh_shape, dcn_mesh_shape=dcn_mesh_shape, axis_names=('dcn', 'data'))
+        xs.set_global_mesh(mesh)
     else:
         mesh = xs.get_1d_mesh('data')
         xs.set_global_mesh(mesh)
