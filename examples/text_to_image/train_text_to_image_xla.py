@@ -29,6 +29,7 @@ import torch_xla.distributed.spmd as xs
 
 PROFILE_DIR=os.environ.get('PROFILE_DIR', None)
 CACHE_DIR = os.environ.get('CACHE_DIR', None)
+NUM_SLICES = os.environ.get('NUM_SLiCES', 1)
 if CACHE_DIR:
     xr.initialize_cache(CACHE_DIR, readonly=False)
 xr.use_spmd()
@@ -393,8 +394,14 @@ def main(args):
     server = xp.start_server(9012)
 
     num_devices = xr.global_runtime_device_count()
-    mesh = xs.get_1d_mesh('data')
-    xs.set_global_mesh(mesh)
+    if NUM_SLICES > 1:
+        dcn_axis = NUM_SLICES
+        ici_mesh_shape = (1, num_devices // dcn_axis)
+        dcn_mesh_shape = (dcn_axis, 1)
+        mesh = xs.HybridMesh(ici_mesh_shape=ici_mesh_shape, dcn_mesh_shape=dcn_mesh_shape, axis_names=('dcn', 'data'))
+    else:
+        mesh = xs.get_1d_mesh('data')
+        xs.set_global_mesh(mesh)
 
     text_encoder = CLIPTextModel.from_pretrained(
         args.pretrained_model_name_or_path,
@@ -525,18 +532,32 @@ def main(args):
         prefetch_factor=args.loader_prefetch_factor,
     )
 
-    train_dataloader = pl.MpDeviceLoader(
-        train_dataloader,
-        device,
-        input_sharding={
-            "pixel_values": xs.ShardingSpec(
-                mesh, ("data", None, None, None), minibatch=True
-            ),
-            "input_ids": xs.ShardingSpec(mesh, ("data", None), minibatch=True),
-        },
-        loader_prefetch_size=args.loader_prefetch_size,
-        device_prefetch_size=args.device_prefetch_size,
-    )
+    if NUM_SLICES > 1:
+        train_dataloader = pl.MpDeviceLoader(
+            train_dataloader,
+            device,
+            input_sharding={
+                "pixel_values": xs.ShardingSpec(
+                    mesh, (("dcn", "data"), None, None, None), minibatch=True
+                ),
+                "input_ids": xs.ShardingSpec(mesh, (("dcn", "data"), None), minibatch=True),
+            },
+            loader_prefetch_size=args.loader_prefetch_size,
+            device_prefetch_size=args.device_prefetch_size,
+        )
+    else:
+        train_dataloader = pl.MpDeviceLoader(
+            train_dataloader,
+            device,
+            input_sharding={
+                "pixel_values": xs.ShardingSpec(
+                    mesh, ("data", None, None, None), minibatch=True
+                ),
+                "input_ids": xs.ShardingSpec(mesh, ("data", None), minibatch=True),
+            },
+            loader_prefetch_size=args.loader_prefetch_size,
+            device_prefetch_size=args.device_prefetch_size,
+        )
 
     num_hosts = xr.process_count()
     num_devices_per_host = num_devices // num_hosts
