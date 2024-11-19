@@ -29,7 +29,7 @@ import torch_xla.distributed.spmd as xs
 
 PROFILE_DIR=os.environ.get('PROFILE_DIR', None)
 CACHE_DIR = os.environ.get('CACHE_DIR', None)
-NUM_SLICES = os.environ.get('NUM_SLiCES', 1)
+NUM_SLICES = int(os.environ.get('NUM_SLICES', 1))
 if CACHE_DIR:
     xr.initialize_cache(CACHE_DIR, readonly=False)
 xr.use_spmd()

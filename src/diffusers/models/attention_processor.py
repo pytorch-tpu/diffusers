@@ -2380,7 +2380,7 @@ class AttnProcessor2_0:
                 # Apply attention mask to key
                 key = key + attention_mask
             query /= math.sqrt(query.shape[3])
-            if os.environ.get('NUM_SLICES', 1) > 1:
+            if int(os.environ.get('NUM_SLICES', 1)) > 1:
                 hidden_states = flash_attention(query, key, value, causal=False, partition_spec=(('dcn','data'), None, None, None))
             else:
                 hidden_states = flash_attention(query, key, value, causal=False, partition_spec=('data', None, None, None))
