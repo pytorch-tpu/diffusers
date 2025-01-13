@@ -6,3 +6,4 @@ ftfy
 tensorboard
 Jinja2
 peft==0.7.0
+Pillow>=9.4.0
