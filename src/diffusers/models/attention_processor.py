@@ -26,6 +26,7 @@ from ..utils.torch_utils import is_torch_version, maybe_allow_in_graph
 
 if is_torch_xla_available():
     from torch_xla.experimental.custom_kernel import flash_attention
+    import torch_xla.distributed.spmd as xs
     import torch_xla.runtime as xr
     XLA_AVAILABLE = True
 else:
