@@ -26,7 +26,7 @@ from ..utils.torch_utils import is_torch_version, maybe_allow_in_graph
 
 if is_torch_xla_available():
     from torch_xla.experimental.custom_kernel import flash_attention
-    import torch_xla.distributed.spmd as xs
+    import torch_xla.runtime as xr
     XLA_AVAILABLE = True
 else:
     XLA_AVAILABLE = False
@@ -2372,7 +2372,6 @@ class AttnProcessor2_0:
         # TODO: add support for attn.scale when we move to Torch 2.1
 
         mesh = xs.get_global_mesh()
-        print("mesh: ", mesh)
         if XLA_AVAILABLE and all(tensor.shape[2] >= 4096 for tensor in [query, key, value]):
             if attention_mask is not None:
                 attention_mask = attention_mask.view(batch_size, 1, 1, attention_mask.shape[-1])
@@ -2382,7 +2381,8 @@ class AttnProcessor2_0:
                 # Apply attention mask to key
                 key = key + attention_mask
             query /= math.sqrt(query.shape[3])
-            hidden_states = flash_attention(query, key, value, causal=False, partition_spec=('data', None, None, None), mesh=mesh)
+            partition_spec = ('data', None, None, None) if xr.use_spmd() else None
+            hidden_states = flash_attention(query, key, value, causal=False, partition_spec=partition_spec, mesh=mesh)
         else:
             hidden_states = F.scaled_dot_product_attention(
                 query, key, value, attn_mask=attention_mask, dropout_p=0.0, is_causal=False
